@@ -282,4 +282,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        # asyncio.run handles the event loop creation and teardown safely
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt received (Ctrl+C). Shutting down broker gracefully...")
