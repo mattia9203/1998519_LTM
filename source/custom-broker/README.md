@@ -1,14 +1,10 @@
 # Custom Broker
 
-Versione minima del broker per il progetto.
-
-Fa solo tre cose:
+Fa tre cose:
 
 1. legge i sensori con `GET /api/devices/`
 2. apre una WebSocket per ogni sensore usando `websocket_url`
 3. fa broadcast di ogni misura a tutte le repliche connesse
-
-Niente reconnect.
 
 ## Contratto usato
 
@@ -81,8 +77,3 @@ custom-broker:
     REPLICA_URLS: ws://processing-1:9000,ws://processing-2:9000,ws://processing-3:9000
     REPLICA_INGEST_PATH: /ws/ingest
 ```
-
-## Note
-
-- I sensori non sono hardcoded.
-- Se una replica non e disponibile, il broker continua con quelle gia collegate.
