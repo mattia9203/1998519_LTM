@@ -6,8 +6,7 @@ Part of a fault-tolerant, distributed seismic analysis platform.
 Responsibilities:
   • Connect to the Broker via WebSocket and receive real-time ground-velocity measurements
   • Maintain a per-sensor sliding window (200 samples) and run DFT-based anomaly detection
-  • Persist sensor metadata and detected events to PostgreSQL (asyncpg)
-  • Forward detected events to the Gateway via HTTP POST (httpx)
+  • Forward sensor metadata and detected events to the Gateway via HTTP POST (httpx)
   • Listen for SHUTDOWN commands from the simulator's /api/control SSE endpoint
 """
 
@@ -21,7 +20,6 @@ import sys
 from collections import deque
 from datetime import datetime
 
-import asyncpg
 import httpx
 import numpy as np
 import websockets
@@ -49,13 +47,13 @@ raw_broker_urls = os.getenv("BROKER_URLS") or os.getenv(
 BROKER_URLS = [url.strip() for url in raw_broker_urls.split(",") if url.strip()]
 HTTP_HOST = os.getenv("HTTP_HOST", "0.0.0.0")
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8000"))
-
-DB_DSN = os.getenv(
-    "DB_DSN",
-    "postgresql://replica:replica@localhost:5432/seismic",
-)
-
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8001/api/events")
+default_sensor_url = (
+    f"{GATEWAY_URL.rsplit('/api/events', 1)[0]}/api/sensors"
+    if GATEWAY_URL.endswith("/api/events")
+    else "http://localhost:8001/api/sensors"
+)
+GATEWAY_SENSOR_URL = os.getenv("GATEWAY_SENSOR_URL", default_sensor_url)
 SIMULATOR_URL = os.getenv("SIMULATOR_URL", "http://localhost:8080")
 CONTROL_STREAM_ENABLED = os.getenv("CONTROL_STREAM_ENABLED", "false").lower() in {
     "1",
@@ -79,7 +77,6 @@ COOLDOWN_SAMPLES = int(
 # ---------------------------------------------------------------------------
 # Shared runtime state
 # ---------------------------------------------------------------------------
-db_pool: asyncpg.Pool | None = None
 http_client: httpx.AsyncClient | None = None
 
 # Per-sensor sliding windows  {sensor_id: deque[float]}
@@ -92,7 +89,7 @@ cooldown_counters: dict[str, int] = {}
 # Sampling-rate cache          {sensor_id: float}
 sampling_rates: dict[str, float] = {}
 
-# Sensors already inserted into DB
+# Sensors already registered through the gateway
 seen_sensors: set[str] = set()
 
 # Asyncio event — set when we need to shut down
@@ -112,110 +109,50 @@ async def health() -> dict:
         "health_url": f"http://{HTTP_HOST}:{resolved_http_port}/health",
         "broker_urls": BROKER_URLS,
         "gateway_url": GATEWAY_URL,
+        "gateway_sensor_url": GATEWAY_SENSOR_URL,
     }
 
 
 # ---------------------------------------------------------------------------
-# Database helpers
+# Gateway forwarding helpers
 # ---------------------------------------------------------------------------
 
 
-async def connect_db() -> None:
-    """Connect to an already-initialised PostgreSQL database and open a pool."""
-    global db_pool
-    db_pool = await asyncpg.create_pool(dsn=DB_DSN, min_size=2, max_size=10)
-    log.info("Connected to database.")
+def build_sensor_payload(payload: dict) -> dict:
+    return {
+        "sensor_id": payload.get("sensor_id"),
+        "sensor_name": payload.get("sensor_name"),
+        "category": payload.get("category"),
+        "region": payload.get("region"),
+        "coordinates": payload.get("coordinates"),
+        "measurement_unit": payload.get("measurement_unit"),
+    }
 
 
-async def upsert_sensor(payload: dict) -> None:
-    """Insert static sensor metadata — once per unique sensor_id."""
-    if db_pool is None:
-        return
-
+async def register_sensor_with_gateway(payload: dict) -> None:
+    """Register static sensor metadata through the gateway once per runtime."""
     sensor_id = payload["sensor_id"]
     if sensor_id in seen_sensors:
         return
     seen_sensors.add(sensor_id)
-    coords = payload.get("coordinates", {})
-    try:
-        async with db_pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO sensors
-                    (sensor_id, sensor_name, category, region,
-                     latitude, longitude, measurement_unit)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT (sensor_id) DO NOTHING;
-                """,
-                sensor_id,
-                payload.get("sensor_name"),
-                payload.get("category"),
-                payload.get("region"),
-                coords.get("latitude"),
-                coords.get("longitude"),
-                payload.get("measurement_unit"),
-            )
-        log.info("Sensor registered: %s", sensor_id)
-    except Exception as exc:
-        log.error("DB error upserting sensor %s: %s", sensor_id, exc)
-        seen_sensors.discard(sensor_id)  # retry next time
-
-
-async def persist_event(event: dict) -> None:
-    """Save a detected event — idempotent via ON CONFLICT DO NOTHING."""
-    if db_pool is None:
-        return
 
     try:
-        timestamp = event["last_sample_timestamp"]
-        if isinstance(timestamp, str):
-            timestamp = datetime.fromisoformat(timestamp)
-
-        async with db_pool.acquire() as conn:
-            status = await conn.execute(
-                """
-                INSERT INTO events
-                    (event_id, sensor_id, event_type, last_sample_timestamp,
-                     peak_frequency, peak_amplitude)
-                VALUES ($1, $2, $3, $4::timestamptz, $5, $6)
-                ON CONFLICT (event_id) DO NOTHING;
-                """,
-                event["event_id"],
-                event["sensor_id"],
-                event["event_type"],
-                timestamp,
-                event["peak_frequency"],
-                event["peak_amplitude"],
-            )
-        if status.endswith("1"):
-            log.info(
-                "Event persisted: event_id=%s sensor=%s type=%s ts=%s",
-                event["event_id"],
-                event["sensor_id"],
-                event["event_type"],
-                event["last_sample_timestamp"],
-            )
+        resp = await http_client.post(
+            GATEWAY_SENSOR_URL,
+            json=build_sensor_payload(payload),
+            timeout=5.0,
+        )
+        resp.raise_for_status()
+        log.info("Sensor registered via gateway: %s", sensor_id)
     except Exception as exc:
-        log.error("DB error persisting event: %s", exc)
-
-
-# ---------------------------------------------------------------------------
-# Gateway forwarding
-# ---------------------------------------------------------------------------
+        log.error("Gateway sensor registration error for %s: %s", sensor_id, exc)
+        seen_sensors.discard(sensor_id)
 
 
 async def forward_to_gateway(event: dict) -> None:
-    """POST the event to the Gateway — fire-and-forget style."""
-    payload = {
-        "event_id": event["event_id"],
-        "sensor_id": event["sensor_id"],
-        "event_type": event["event_type"],
-        "last_sample_timestamp": event["last_sample_timestamp"],
-        "peak_frequency": event["peak_frequency"],
-        "peak_amplitude": event["peak_amplitude"],
-    }
+    """POST the event to the gateway, which owns deduplication and persistence."""
     try:
-        resp = await http_client.post(GATEWAY_URL, json=payload, timeout=5.0)
+        resp = await http_client.post(GATEWAY_URL, json=event, timeout=5.0)
         resp.raise_for_status()
     except Exception as exc:
         log.error("Gateway forward error: %s", exc)
@@ -292,8 +229,8 @@ async def process_message(raw: str) -> None:
         log.warning("Incomplete payload — skipping: %s", payload)
         return
 
-    # ---- Sensor metadata (static, persisted once) --------------------------
-    asyncio.create_task(upsert_sensor(payload))
+    # ---- Sensor metadata (static, persisted once through the gateway) ------
+    asyncio.create_task(register_sensor_with_gateway(payload))
 
     # ---- Update per-sensor sliding window & counters -----------------------
     sampling_rates[sensor_id] = sampling_rate
@@ -350,6 +287,11 @@ async def process_message(raw: str) -> None:
         "last_sample_timestamp": timestamp,
         "peak_frequency": round(peak_freq, 4),
         "peak_amplitude": round(peak_amp, 6),
+        "sensor_name": payload.get("sensor_name"),
+        "category": payload.get("category"),
+        "region": payload.get("region"),
+        "coordinates": payload.get("coordinates"),
+        "measurement_unit": payload.get("measurement_unit"),
     }
 
     log.info(
@@ -365,12 +307,7 @@ async def process_message(raw: str) -> None:
     # Trigger cooldown to prevent spamming the same event over and over.
     cooldown_counters[sensor_id] = COOLDOWN_SAMPLES
 
-    # Persist + forward concurrently
-    await asyncio.gather(
-        persist_event(event),
-        forward_to_gateway(event),
-        return_exceptions=True,
-    )
+    await forward_to_gateway(event)
 
 
 # ---------------------------------------------------------------------------
@@ -516,13 +453,9 @@ async def run_health_server() -> None:
 
 
 async def graceful_shutdown() -> None:
-    """Wait for shutdown signal, then tear down DB pool and HTTP client."""
+    """Wait for shutdown signal, then tear down the HTTP client."""
     await shutdown_event.wait()
     log.info("Shutting down — closing resources …")
-
-    if db_pool:
-        await db_pool.close()
-        log.info("Database pool closed.")
 
     if http_client:
         await http_client.aclose()
@@ -570,18 +503,14 @@ async def main() -> None:
     # Initialise shared resources
     http_client = httpx.AsyncClient()
     log.info(
-        "Replica starting with health=http://%s:%d/health broker=%s gateway=%s control_stream=%s",
+        "Replica starting with health=http://%s:%d/health broker=%s gateway=%s sensor_gateway=%s control_stream=%s",
         HTTP_HOST,
         HTTP_PORT,
         BROKER_URLS[0],
         GATEWAY_URL,
+        GATEWAY_SENSOR_URL,
         "enabled" if CONTROL_STREAM_ENABLED else "disabled",
     )
-    try:
-        await connect_db()
-    except Exception as exc:
-        db_pool = None
-        log.warning("Database unavailable, continuing without persistence: %s", exc)
 
     # Launch all background tasks
     tasks = [

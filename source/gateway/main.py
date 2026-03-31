@@ -1,7 +1,6 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from pydantic import BaseModel
 from datetime import datetime
 from collections import deque
 import asyncio
@@ -51,6 +50,7 @@ dead_replicas = []
 
 # Cache for event deduplication [cite: 71, 98]
 recent_events_cache = deque(maxlen=100)
+seen_sensors_cache: set[str] = set()
 
 DB_DSN = os.getenv("DB_DSN", "postgresql://replica:replica@localhost:5432/seismic")
 db_pool: asyncpg.Pool | None = None
@@ -88,7 +88,134 @@ ws_manager = ConnectionManager()
 
 
 # ==========================================
-# 4. HEALTH CHECK TASK (Fault Tolerance [cite: 105, 106, 137])
+# 4. DATABASE HELPERS
+# ==========================================
+def _extract_coordinates(payload: dict) -> tuple[float | None, float | None]:
+    coordinates = payload.get("coordinates") or {}
+    latitude = payload.get("latitude", coordinates.get("latitude"))
+    longitude = payload.get("longitude", coordinates.get("longitude"))
+    return latitude, longitude
+
+
+def _parse_timestamp(value: str | datetime) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    normalized = value.replace("Z", "+00:00")
+    return datetime.fromisoformat(normalized)
+
+
+def _build_live_payload(payload: dict) -> dict:
+    latitude, longitude = _extract_coordinates(payload)
+    return {
+        "event_id": payload.get("event_id"),
+        "sensor_id": payload.get("sensor_id"),
+        "event_type": payload.get("event_type"),
+        "last_sample_timestamp": payload.get("last_sample_timestamp"),
+        "peak_frequency": payload.get("peak_frequency"),
+        "peak_amplitude": payload.get("peak_amplitude"),
+        "duration": payload.get("duration"),
+        "sensor_name": payload.get("sensor_name"),
+        "category": payload.get("category"),
+        "region": payload.get("region"),
+        "measurement_unit": payload.get("measurement_unit"),
+        "latitude": latitude,
+        "longitude": longitude,
+    }
+
+
+async def upsert_sensor(payload: dict) -> bool:
+    if db_pool is None:
+        log.error("Cannot register sensor without a DB connection.")
+        return False
+
+    sensor_id = payload.get("sensor_id")
+    if not sensor_id:
+        log.warning("Sensor registration skipped because sensor_id is missing.")
+        return False
+
+    if sensor_id in seen_sensors_cache:
+        return True
+
+    latitude, longitude = _extract_coordinates(payload)
+
+    try:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO sensors
+                    (sensor_id, sensor_name, category, region,
+                     latitude, longitude, measurement_unit)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (sensor_id) DO UPDATE
+                SET
+                    sensor_name = COALESCE(EXCLUDED.sensor_name, sensors.sensor_name),
+                    category = COALESCE(EXCLUDED.category, sensors.category),
+                    region = COALESCE(EXCLUDED.region, sensors.region),
+                    latitude = COALESCE(EXCLUDED.latitude, sensors.latitude),
+                    longitude = COALESCE(EXCLUDED.longitude, sensors.longitude),
+                    measurement_unit = COALESCE(
+                        EXCLUDED.measurement_unit,
+                        sensors.measurement_unit
+                    );
+                """,
+                sensor_id,
+                payload.get("sensor_name"),
+                payload.get("category"),
+                payload.get("region"),
+                latitude,
+                longitude,
+                payload.get("measurement_unit"),
+            )
+        seen_sensors_cache.add(sensor_id)
+        log.info("Sensor registered through gateway: %s", sensor_id)
+        return True
+    except Exception as exc:
+        seen_sensors_cache.discard(sensor_id)
+        log.error("DB error upserting sensor %s: %s", sensor_id, exc)
+        return False
+
+
+async def persist_event(payload: dict) -> str:
+    if db_pool is None:
+        log.error("Cannot persist event without a DB connection.")
+        return "db_unavailable"
+
+    try:
+        timestamp = _parse_timestamp(payload["last_sample_timestamp"])
+        async with db_pool.acquire() as conn:
+            status = await conn.execute(
+                """
+                INSERT INTO events
+                    (event_id, sensor_id, event_type, last_sample_timestamp,
+                     peak_frequency, peak_amplitude, duration)
+                VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7)
+                ON CONFLICT (event_id) DO NOTHING;
+                """,
+                payload["event_id"],
+                payload["sensor_id"],
+                payload["event_type"],
+                timestamp,
+                payload.get("peak_frequency"),
+                payload.get("peak_amplitude"),
+                payload.get("duration"),
+            )
+        if status.endswith("1"):
+            log.info(
+                "Event persisted by gateway: event_id=%s sensor=%s type=%s ts=%s",
+                payload["event_id"],
+                payload["sensor_id"],
+                payload["event_type"],
+                payload["last_sample_timestamp"],
+            )
+            return "inserted"
+        return "duplicate"
+    except Exception as exc:
+        log.error("DB error persisting event %s: %s", payload.get("event_id"), exc)
+        return "error"
+
+
+# ==========================================
+# 5. HEALTH CHECK TASK (Fault Tolerance [cite: 105, 106, 137])
 # ==========================================
 async def ping_replicas_continuously():
     """Refresh replica health from a fixed set of local ports."""
@@ -119,7 +246,7 @@ async def ping_replicas_continuously():
 
 
 # ==========================================
-# 5. LIFESPAN & APP INIT
+# 6. LIFESPAN & APP INIT
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -129,7 +256,7 @@ async def lifespan(app: FastAPI):
     # 1. Start the Health Check task
     health_task = asyncio.create_task(ping_replicas_continuously())
 
-    # 2. Connect the Gateway to the Database (read-only)
+    # 2. Connect the Gateway to the Database
     try:
         db_pool = await asyncpg.create_pool(dsn=DB_DSN, min_size=1, max_size=10)
         log.info("Gateway connected to PostgreSQL database.")
@@ -158,8 +285,21 @@ app.add_middleware(
 )
 
 # ==========================================
-# 6. API ROUTES
+# 7. API ROUTES
 # ==========================================
+
+
+@app.post("/api/sensors")
+async def register_sensor(payload: dict):
+    sensor_id = payload.get("sensor_id")
+    if not sensor_id:
+        raise HTTPException(status_code=400, detail="missing_sensor_id")
+
+    registered = await upsert_sensor(payload)
+    if not registered:
+        raise HTTPException(status_code=503, detail="sensor_persistence_failed")
+
+    return {"status": "registered", "sensor_id": sensor_id}
 
 
 @app.post("/api/events")
@@ -172,7 +312,13 @@ async def receive_event(payload: dict):
     event_id = payload.get("event_id")
 
     if not event_id:
-        return {"status": "error", "reason": "missing_event_id"}
+        raise HTTPException(status_code=400, detail="missing_event_id")
+    if not sensor_id:
+        raise HTTPException(status_code=400, detail="missing_sensor_id")
+    if not payload.get("event_type"):
+        raise HTTPException(status_code=400, detail="missing_event_type")
+    if not payload.get("last_sample_timestamp"):
+        raise HTTPException(status_code=400, detail="missing_last_sample_timestamp")
 
     normalized_payload = dict(payload)
     normalized_payload["event_id"] = event_id
@@ -188,17 +334,36 @@ async def receive_event(payload: dict):
         )
         return {"status": "ignored", "reason": "duplicate"}
 
+    sensor_registered = await upsert_sensor(normalized_payload)
+    if not sensor_registered:
+        raise HTTPException(status_code=503, detail="sensor_persistence_failed")
+
+    persistence_status = await persist_event(normalized_payload)
+    if persistence_status == "duplicate":
+        recent_events_cache.append(event_id)
+        log.info(
+            "DUPLICATE(DB): event_id=%s type=%s sensor=%s",
+            event_id,
+            normalized_payload.get("event_type"),
+            sensor_id,
+        )
+        return {"status": "ignored", "reason": "duplicate"}
+
+    if persistence_status != "inserted":
+        raise HTTPException(status_code=503, detail="event_persistence_failed")
+
     recent_events_cache.append(event_id)
+    live_payload = _build_live_payload(normalized_payload)
     log.info(
         "ALERT: event_id=%s type=%s sensor=%s amp=%s",
         event_id,
-        normalized_payload.get("event_type"),
+        live_payload.get("event_type"),
         sensor_id,
-        normalized_payload.get("peak_amplitude"),
+        live_payload.get("peak_amplitude"),
     )
 
     # Forward to Live Feed via WebSocket [cite: 110]
-    await ws_manager.broadcast(normalized_payload)
+    await ws_manager.broadcast(live_payload)
 
     return {"status": "dispatched", "event_id": event_id}
 
@@ -221,7 +386,7 @@ async def get_system_status():
 
 
 # ==========================================
-# 7. WEBSOCKET ROUTE
+# 8. WEBSOCKET ROUTE
 # ==========================================
 @app.websocket("/ws/live")
 async def websocket_live_feed(websocket: WebSocket):
@@ -235,7 +400,7 @@ async def websocket_live_feed(websocket: WebSocket):
 
 
 # ==========================================
-# 8. HISTORY ROUTE
+# 9. HISTORY ROUTE
 # ==========================================
 @app.get("/api/history")
 async def get_historical_events(

@@ -68,12 +68,9 @@ services:
       HTTP_PORT: 8000
       BROKER_URL: ws://custom-broker:9000/ws/ingest
       GATEWAY_URL: http://gateway:8001/api/events
-      DB_DSN: postgresql://replica:replica@postgres:5432/seismic
       SIMULATOR_URL: http://simulator:8080
       CONTROL_STREAM_ENABLED: "true"
     depends_on:
-      postgres:
-        condition: service_healthy
       simulator:
         condition: service_started
       custom-broker:
@@ -89,12 +86,9 @@ services:
       HTTP_PORT: 8000
       BROKER_URL: ws://custom-broker:9000/ws/ingest
       GATEWAY_URL: http://gateway:8001/api/events
-      DB_DSN: postgresql://replica:replica@postgres:5432/seismic
       SIMULATOR_URL: http://simulator:8080
       CONTROL_STREAM_ENABLED: "true"
     depends_on:
-      postgres:
-        condition: service_healthy
       simulator:
         condition: service_started
       custom-broker:
@@ -110,12 +104,9 @@ services:
       HTTP_PORT: 8000
       BROKER_URL: ws://custom-broker:9000/ws/ingest
       GATEWAY_URL: http://gateway:8001/api/events
-      DB_DSN: postgresql://replica:replica@postgres:5432/seismic
       SIMULATOR_URL: http://simulator:8080
       CONTROL_STREAM_ENABLED: "true"
     depends_on:
-      postgres:
-        condition: service_healthy
       simulator:
         condition: service_started
       custom-broker:
@@ -131,12 +122,9 @@ services:
       HTTP_PORT: 8000
       BROKER_URL: ws://custom-broker:9000/ws/ingest
       GATEWAY_URL: http://gateway:8001/api/events
-      DB_DSN: postgresql://replica:replica@postgres:5432/seismic
       SIMULATOR_URL: http://simulator:8080
       CONTROL_STREAM_ENABLED: "true"
     depends_on:
-      postgres:
-        condition: service_healthy
       simulator:
         condition: service_started
       custom-broker:
@@ -152,12 +140,9 @@ services:
       HTTP_PORT: 8000
       BROKER_URL: ws://custom-broker:9000/ws/ingest
       GATEWAY_URL: http://gateway:8001/api/events
-      DB_DSN: postgresql://replica:replica@postgres:5432/seismic
       SIMULATOR_URL: http://simulator:8080
       CONTROL_STREAM_ENABLED: "true"
     depends_on:
-      postgres:
-        condition: service_healthy
       simulator:
         condition: service_started
       custom-broker:

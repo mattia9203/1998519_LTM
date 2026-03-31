@@ -1,4 +1,3 @@
-asyncpg
 fastapi
 httpx
 httpx-sse

@@ -2,7 +2,7 @@
 
 The project is a distributed, fault-tolerant seismic analysis platform.
 
-Its purpose is to ingest live seismic measurements from an external simulator, redistribute them through a custom broker, process them through replicated analysis nodes, classify suspicious seismic activity through frequency analysis, persist detected events in a duplicate-safe way, and expose both live and historical information through a real-time dashboard.
+Its purpose is to ingest live seismic measurements from an external simulator, redistribute them through a custom broker, process them through replicated analysis nodes, classify suspicious seismic activity through frequency analysis, persist sensor metadata and detected events through the gateway in a duplicate-safe way, and expose both live and historical information through a real-time dashboard.
 
 The implemented system is based on the following architectural principles:
 
@@ -10,8 +10,9 @@ The implemented system is based on the following architectural principles:
 - multiple identical processing replicas
     - sliding-window analysis on each replica
     - FFT-based frequency detection
-    - duplicate-safe persistence
+    - duplicate-safe event generation
 - a single gateway exposed to the frontend
+    - duplicate-safe persistence to PostgreSQL after gateway-side deduplication
 - a dashboard for real-time monitoring, historical investigation, and replica health
 - full deployment through `docker compose up`
 
@@ -59,7 +60,7 @@ The deployed topology is defined in `source/docker-compose.yml`.
 The system uses two internal message structures:
 
 - a normalized measurement envelope broadcast by the broker to all processing replicas
-- a detected event envelope emitted by the replicas toward the gateway
+- a detected event envelope emitted by the replicas toward the gateway, then deduplicated and persisted by the gateway with the unchanged SQL schema
 
 ## Measurement Envelope
 
@@ -94,12 +95,20 @@ Field meaning:
 
 ## Detected Event Envelope
 
-When a replica classifies a seismic disturbance, it emits the following payload toward the gateway:
+When a replica classifies a seismic disturbance, it emits the following enriched payload toward the gateway:
 
 ```json
 {
   "event_id": "sha256(sensor_id|timestamp|event_type)",
   "sensor_id": "sensor-08",
+  "sensor_name": "DC North Perimeter",
+  "category": "datacenter",
+  "region": "Replica Datacenter",
+  "coordinates": {
+    "latitude": 45.4642,
+    "longitude": 9.19
+  },
+  "measurement_unit": "mm/s",
   "event_type": "earthquake",
   "last_sample_timestamp": "2026-03-25T00:00:09.950000+00:00",
   "peak_frequency": 1.6,
@@ -111,10 +120,17 @@ Field meaning:
 
 - `event_id`: deterministic identifier used for deduplication
 - `sensor_id`: originating sensor
+- `sensor_name`: human-readable sensor label copied from the broker envelope
+- `category`: sensor category, either `field` or `datacenter`
+- `region`: logical geographic region associated with the sensor
+- `coordinates`: latitude and longitude forwarded so the gateway can keep sensor metadata aligned with PostgreSQL
+- `measurement_unit`: unit used by the originating sensor
 - `event_type`: `earthquake`, `conventional_explosion`, or `nuclear_like`
 - `last_sample_timestamp`: timestamp of the last sample in the analyzed window
 - `peak_frequency`: dominant frequency extracted from FFT analysis
 - `peak_amplitude`: dominant spectral amplitude associated with the detected event
+
+The gateway uses this payload to upsert the `sensors` table when needed, persist the event into `events`, and expose the same sensor/event information to the frontend.
 
 # RULE MODEL:
 

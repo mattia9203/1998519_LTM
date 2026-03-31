@@ -2,7 +2,7 @@
 
 The project is a distributed, fault-tolerant seismic analysis platform.
 
-Its purpose is to ingest live seismic measurements from an external simulator, redistribute them through a custom broker, process them through replicated analysis nodes, classify suspicious seismic activity through frequency analysis, persist detected events in a duplicate-safe way, and expose both live and historical information through a real-time dashboard.
+Its purpose is to ingest live seismic measurements from an external simulator, redistribute them through a custom broker, process them through replicated analysis nodes, classify suspicious seismic activity through frequency analysis, persist sensor metadata and detected events through the gateway in a duplicate-safe way, and expose both live and historical information through a real-time dashboard.
 
 The implemented system is based on the following architectural principles:
 
@@ -10,8 +10,9 @@ The implemented system is based on the following architectural principles:
 - multiple identical processing replicas
     - sliding-window analysis on each replica
     - FFT-based frequency detection
-    - duplicate-safe persistence
+    - duplicate-safe event generation
 - a single gateway exposed to the frontend
+    - duplicate-safe persistence to PostgreSQL after gateway-side deduplication
 - a dashboard for real-time monitoring, historical investigation, and replica health
 - full deployment through `docker compose up`
 
@@ -121,38 +122,37 @@ The service starts a WebSocket server for replicas, waits until the expected num
 ## CONTAINER_NAME: Processing-Replica-Cluster
 
 ### DESCRIPTION:
-Set of five identical processing containers that perform sliding-window analysis, FFT-based classification, persistence, and alert forwarding.
+Set of five identical processing containers that perform sliding-window analysis, FFT-based classification, and alert forwarding toward the gateway.
 
 ### USER STORIES:
-Performs detection, classification, persistence, and gateway forwarding for user stories: 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17. Exposes replica health and reacts to shutdown commands for user stories: 16, 18, 19, 20.
+Performs detection, classification, and gateway forwarding for user stories: 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17. Exposes replica health and reacts to shutdown commands for user stories: 16, 18, 19, 20.
 
 ### PORTS:
 Each replica exposes `/health` on port `8000`. In the Docker Compose deployment this port is used only inside the Docker network, so the replicas are reached by service name and no host port is published.
 
 ### DESCRIPTION:
-The deployed system starts five instances of the same processing service: `replica-1`, `replica-2`, `replica-3`, `replica-4`, and `replica-5`. Each replica receives the same measurement stream from the broker, maintains a per-sensor sliding window, runs FFT analysis, classifies detected disturbances, writes detections to PostgreSQL, sends alerts to the gateway, and exposes a health endpoint.
+The deployed system starts five instances of the same processing service: `replica-1`, `replica-2`, `replica-3`, `replica-4`, and `replica-5`. Each replica receives the same measurement stream from the broker, maintains a per-sensor sliding window, runs FFT analysis, classifies detected disturbances, forwards sensor metadata and detections to the gateway, and exposes a health endpoint.
 
 ### PERSISTENCE EVALUATION
-The processing replicas do not store state locally on disk. Persistent data is delegated to PostgreSQL. In-memory state is limited to sensor windows, counters, caches, and the HTTP and DB client pools.
+The processing replicas do not store state locally on disk and do not own direct database access anymore. Persistent data is delegated to PostgreSQL through the gateway. In-memory state is limited to sensor windows, counters, caches, and the HTTP client pool.
 
 ### EXTERNAL SERVICES CONNECTIONS
 The replicas connect to:
 
 - the Custom-Broker through WebSocket
 - the Gateway through HTTP
-- PostgreSQL through `asyncpg`
 - the Simulator through the SSE control stream when enabled
 
 ### MICROSERVICES:
 
 #### MICROSERVICE: processing-replica
 - TYPE: backend
-- DESCRIPTION: Performs FFT-based analysis on sliding windows, classifies seismic events, persists detections, and forwards alerts to the gateway.
+- DESCRIPTION: Performs FFT-based analysis on sliding windows, classifies seismic events, and forwards sensor metadata and alerts to the gateway.
 - PORTS: `8000` for the replica health endpoint; upstream connections to the broker on `9000` and to the gateway on `8001`
 - TECHNOLOGICAL SPECIFICATION:
-The microservice is developed in Python 3.11 and uses FastAPI for `/health`, `websockets` for broker consumption, `numpy` for FFT, `asyncpg` for PostgreSQL persistence, `httpx` for forwarding events to the gateway, and `httpx-sse` for the simulator control stream.
+The microservice is developed in Python 3.11 and uses FastAPI for `/health`, `websockets` for broker consumption, `numpy` for FFT, `httpx` for forwarding sensor metadata and events to the gateway, and `httpx-sse` for the simulator control stream.
 - SERVICE ARCHITECTURE:
-The service consumes the broker stream continuously, stores a fixed-size window for each sensor, runs overlapping FFT analysis, applies the hard-coded seismic classification rules, persists detected events with `ON CONFLICT DO NOTHING`, and forwards them to the gateway. A health server runs in parallel, and the replica can shut down gracefully on simulator control commands.
+The service consumes the broker stream continuously, stores a fixed-size window for each sensor, runs overlapping FFT analysis, applies the hard-coded seismic classification rules, forwards static sensor metadata to the gateway once per sensor, and forwards enriched detected events to the gateway. A health server runs in parallel, and the replica can shut down gracefully on simulator control commands.
 - ENDPOINTS:
 
 | HTTP METHOD | URL | Description | User Stories |
@@ -172,13 +172,13 @@ Aggregates dashboard APIs and live feeds for user stories: 1, 2, 3, 4, 5, 6, 7, 
 8001:8001
 
 ### DESCRIPTION:
-The Gateway container receives detected events from the replicas, suppresses duplicate live alerts, exposes read-only APIs over the PostgreSQL data, monitors replica health, and broadcasts live events to connected dashboard clients. It is the only backend service directly accessed by the frontend.
+The Gateway container receives sensor metadata and detected events from the replicas, suppresses duplicate live alerts, persists the consolidated data into PostgreSQL, exposes the dashboard APIs over the stored data, monitors replica health, and broadcasts live events to connected dashboard clients. It is the only backend service directly accessed by the frontend.
 
 ### PERSISTENCE EVALUATION
-The Gateway container does not own persistent storage. It reads historical data from PostgreSQL and keeps only a short in-memory cache for live duplicate suppression and the current replica-health state.
+The Gateway container does not own local persistent storage, but it is the only service responsible for writing persistent platform data. It upserts sensor metadata and inserts deduplicated events into PostgreSQL while keeping only a short in-memory cache for live duplicate suppression and the current replica-health state.
 
 ### EXTERNAL SERVICES CONNECTIONS
-The Gateway container connects to PostgreSQL and polls all configured replica `/health` endpoints. It also accepts HTTP event submissions from the replicas and WebSocket connections from the frontend.
+The Gateway container connects to PostgreSQL and polls all configured replica `/health` endpoints. It also accepts HTTP sensor and event submissions from the replicas and WebSocket connections from the frontend.
 
 ### MICROSERVICES:
 
@@ -189,12 +189,13 @@ The Gateway container connects to PostgreSQL and polls all configured replica `/
 - TECHNOLOGICAL SPECIFICATION:
 The microservice is developed in Python 3.11 and uses FastAPI, `asyncpg`, `httpx`, and native WebSocket support through FastAPI/Uvicorn.
 - SERVICE ARCHITECTURE:
-The service exposes REST APIs for historical queries and event details, a live WebSocket feed for the dashboard, and a periodic health check task that polls all configured replicas. Incoming events are deduplicated in memory before being broadcast to the dashboard.
+The service exposes internal ingestion APIs for sensors and events, REST APIs for historical queries and event details, a live WebSocket feed for the dashboard, and a periodic health check task that polls all configured replicas. Incoming events are deduplicated in memory, persisted to PostgreSQL with the existing schema, and only then broadcast to the dashboard.
 - ENDPOINTS:
 
 | HTTP METHOD | URL | Description | User Stories |
 | ----------- | --- | ----------- | ------------ |
-| POST | /api/events | Receives detected events from the replicas. | Supports 17 |
+| POST | /api/sensors | Receives sensor metadata from the replicas and upserts the `sensors` table. | Supports 1, 2, 3 |
+| POST | /api/events | Receives detected events from the replicas, deduplicates them, and persists them to PostgreSQL. | Supports 17 |
 | GET | /api/system/status | Returns the aggregated health summary of the processing cluster. | Supports 4, 16, 18, 19, 20 |
 | WS | /ws/live | Pushes live deduplicated events to the dashboard. | Feeds 5, 6, 8, 9, 17 |
 | GET | /api/history | Returns persisted historical events with filters by time, sensor, region, event type, and frequency; the frontend applies the minimum-amplitude filter locally. | Supports 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17 |
@@ -208,7 +209,7 @@ The service exposes REST APIs for historical queries and event details, a live W
 Persistent storage used for sensor metadata and detected events.
 
 ### USER STORIES:
-Persists sensor metadata and event history for user stories: 1, 2, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15. Enforces unique event storage together with replica-side idempotency for user story: 17.
+Persists sensor metadata and event history for user stories: 1, 2, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15. Enforces unique event storage together with gateway-side deduplication for user story: 17.
 
 ### PORTS:
 5432:5432
@@ -220,7 +221,7 @@ The PostgreSQL container stores the consolidated state of the platform. It keeps
 This container is the persistent core of the platform. It guarantees history retention across service restarts and is essential for duplicate-safe event storage.
 
 ### EXTERNAL SERVICES CONNECTIONS
-The PostgreSQL container is used by the processing replicas for writes and by the gateway for reads.
+The PostgreSQL container is used only by the gateway for both writes and reads.
 
 ### MICROSERVICES:
 
