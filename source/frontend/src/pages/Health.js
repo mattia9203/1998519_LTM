@@ -1,99 +1,10 @@
-import React, { useEffect, useRef, useState } from "react";
-import { API_BASE } from "../config";
-import {
-  formatCompactTimestamp,
-  replicaLabel,
-} from "../utils/platform";
+import React, { useContext } from "react";
+import { HealthContext } from "../App";
+import { formatCompactTimestamp } from "../utils/platform";
 
 export default function Health() {
-  const replicaStateRef = useRef({});
-  const [summary, setSummary] = useState(null);
-  const [replicaRows, setReplicaRows] = useState([]);
-  const [healthEvents, setHealthEvents] = useState(() => {
-    const saved = sessionStorage.getItem("healthEvents");
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  useEffect(() => {
-    const fetchHealth = async () => {
-      try {
-        const response = await fetch(`${API_BASE}/system/status`);
-        const payload = await response.json();
-        const receivedAt = new Date().toISOString();
-        const nextReplicaState = {};
-        const nextRows = payload.configured_replicas.map((replicaUrl, index) => {
-          const isHealthy = payload.active_list.includes(replicaUrl);
-          const previous = replicaStateRef.current[replicaUrl];
-          const nextStatus = isHealthy ? "healthy" : "unavailable";
-          const lastHeartbeat = isHealthy
-            ? receivedAt
-            : previous?.lastHeartbeat || null;
-          const unavailableSince = isHealthy
-            ? null
-            : previous?.unavailableSince || receivedAt;
-
-          nextReplicaState[replicaUrl] = {
-            status: nextStatus,
-            lastHeartbeat,
-            unavailableSince,
-          };
-
-          return {
-            id: replicaLabel(replicaUrl, index),
-            status: nextStatus,
-            lastHeartbeat,
-            unavailableSince,
-          };
-        });
-
-        const nextEvents = [];
-
-        payload.configured_replicas.forEach((replicaUrl, index) => {
-          const previous = replicaStateRef.current[replicaUrl];
-          const current = nextReplicaState[replicaUrl];
-
-          if (!previous || previous.status === current.status) {
-            return;
-          }
-
-          const label = replicaLabel(replicaUrl, index);
-
-          if (current.status === "unavailable") {
-            nextEvents.unshift(
-              `${formatCompactTimestamp(receivedAt)} UTC | ${label} heartbeat lost`
-            );
-            nextEvents.unshift(
-              `${formatCompactTimestamp(receivedAt)} UTC | ${label} marked unavailable`
-            );
-          } else {
-            nextEvents.unshift(
-              `${formatCompactTimestamp(receivedAt)} UTC | ${label} rejoined cluster`
-            );
-          }
-        });
-
-        replicaStateRef.current = nextReplicaState;
-        setSummary(payload);
-        setReplicaRows(nextRows);
-
-        if (nextEvents.length) {
-          setHealthEvents((current) => {
-            // Unisce i nuovi eventi ai vecchi e tiene gli ultimi 6
-            const updatedEvents = [...nextEvents, ...current].slice(0, 6);
-            // Salva istantaneamente nel browser per sopravvivere al cambio pagina
-            sessionStorage.setItem("healthEvents", JSON.stringify(updatedEvents));
-            return updatedEvents;
-          });
-        }
-      } catch (error) {
-        console.error(error);
-      }
-    };
-
-    fetchHealth();
-    const interval = setInterval(fetchHealth, 5000);
-    return () => clearInterval(interval);
-  }, []);
+  // Leggiamo i dati in tempo reale dal Context globale
+  const { summary, replicaRows, healthEvents } = useContext(HealthContext);
 
   if (!summary) {
     return (
@@ -116,7 +27,6 @@ export default function Health() {
         <div>
           <h1 className="page-title">System Health</h1>
         </div>
-
         <span className="pill">ADMIN</span>
       </header>
 
