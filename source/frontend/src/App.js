@@ -51,7 +51,7 @@ function HealthProvider({ children }) {
             nextEvents.unshift(`${formatCompactTimestamp(receivedAt)} UTC | ${label} heartbeat lost`);
             nextEvents.unshift(`${formatCompactTimestamp(receivedAt)} UTC | ${label} marked unavailable`);
           } else {
-            nextEvents.unshift(`${formatCompactTimestamp(receivedAt)} UTC | ${label} rejoined cluster`);
+            nextEvents.unshift(`${formatCompactTimestamp(receivedAt)} UTC | ${label} joined cluster`);
           }
         });
 

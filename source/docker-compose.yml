@@ -5,8 +5,8 @@ services:
     environment:
       SAMPLING_RATE_HZ: "20"
       AUTO_SHUTDOWN_ENABLED: "true"
-      AUTO_SHUTDOWN_MIN_SECONDS: "20"
-      AUTO_SHUTDOWN_MAX_SECONDS: "30"
+      AUTO_SHUTDOWN_MIN_SECONDS: "30"
+      AUTO_SHUTDOWN_MAX_SECONDS: "90"
     ports:
       - "8080:8080"
 
