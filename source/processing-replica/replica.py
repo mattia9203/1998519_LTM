@@ -114,7 +114,7 @@ async def health() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Gateway forwarding helpers
+# Gateway forwarding
 # ---------------------------------------------------------------------------
 
 
@@ -229,55 +229,42 @@ async def process_message(raw: str) -> None:
         log.warning("Incomplete payload — skipping: %s", payload)
         return
 
-    # ---- Sensor metadata (static, persisted once through the gateway) ------
     asyncio.create_task(register_sensor_with_gateway(payload))
 
-    # ---- Update per-sensor sliding window & counters -----------------------
     sampling_rates[sensor_id] = sampling_rate
 
-    # print(sensor_id, timestamp, value, sampling_rate)
-    # Initialize state for new sensors
     if sensor_id not in windows:
         windows[sensor_id] = deque(maxlen=WINDOW_SIZE)
         sample_counters[sensor_id] = 0
         cooldown_counters[sensor_id] = 0
 
-    # Append new data
     win = windows[sensor_id]
     win.append(float(value))
     sample_counters[sensor_id] += 1
 
-    # Decrement cooldown if active
     if cooldown_counters[sensor_id] > 0:
         cooldown_counters[sensor_id] -= 1
 
-    # ---- Check if we are ready to analyze ----------------------------------
-    # 1. Ensure the window is fully populated initially
     if len(win) < WINDOW_SIZE:
         return
 
-    # 2. Ensure enough new samples have arrived (the slide/stride)
     if sample_counters[sensor_id] < STEP_SIZE:
         return
 
-    # Ready to analyze — reset the step counter
     sample_counters[sensor_id] = 0
 
-    # 3. Skip analysis if we are in a cooldown period from a recent event
     if cooldown_counters[sensor_id] > 0:
         return
 
-    # ---- Run DFT -----------------------------------------------------------
     result = analyse_window(list(win), sampling_rate)
     if result is None:
-        return  # below amplitude threshold
+        return
 
     peak_freq, peak_amp = result
     event_type = classify_frequency(peak_freq)
     if event_type is None:
-        return  # frequency below detectable bands
+        return
 
-    # ---- Event detected! ---------------------------------------------------
     event_id = build_event_id(sensor_id, timestamp, event_type)
 
     event = {
@@ -303,8 +290,6 @@ async def process_message(raw: str) -> None:
         peak_amp,
     )
 
-    # The historical data stays in the buffer.
-    # Trigger cooldown to prevent spamming the same event over and over.
     cooldown_counters[sensor_id] = COOLDOWN_SAMPLES
 
     await forward_to_gateway(event)
@@ -402,7 +387,6 @@ async def listen_control_stream() -> None:
         except (httpx.ReadError, httpx.RemoteProtocolError, httpx.ReadTimeout) as exc:
             if shutdown_event.is_set():
                 return
-            # Quietly retry common SSE disconnects; they are expected in practice.
             pass
         except Exception as exc:
             if shutdown_event.is_set():
@@ -472,27 +456,14 @@ async def graceful_shutdown() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _keyboard_interrupt_watcher() -> None:
-    """
-    Cross-platform Ctrl-C handler.
-    On Windows, loop.add_signal_handler() raises NotImplementedError, so we
-    install a plain signal.signal handler that simply sets the shutdown event
-    from the main thread instead.  asyncio.run() will propagate KeyboardInterrupt
-    out of the event loop, which is caught in __main__.
-    """
-    await shutdown_event.wait()
-
-
 def _install_signal_handlers() -> None:
     """Register SIGINT / SIGTERM in a platform-safe way."""
 
     def _handler(signum, frame):  # noqa: ANN001
         log.info("Signal %s received — requesting shutdown.", signum)
-        # set() is thread-safe and can be called from a signal handler
         shutdown_event.set()
 
     signal.signal(signal.SIGINT, _handler)
-    # SIGTERM is not available on Windows; guard accordingly
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, _handler)
 
@@ -529,6 +500,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        # Ctrl-C pressed before the event loop caught the signal
         shutdown_event.set()
         sys.exit(0)

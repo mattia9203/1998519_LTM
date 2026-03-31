@@ -10,7 +10,6 @@ The implemented system is based on the following architectural principles:
 - multiple identical processing replicas
     - sliding-window analysis on each replica
     - FFT-based frequency detection
-    - duplicate-safe event generation
 - a single gateway exposed to the frontend
     - duplicate-safe persistence to PostgreSQL after gateway-side deduplication
 - a dashboard for real-time monitoring, historical investigation, and replica health

@@ -48,7 +48,6 @@ REPLICA_PORTS = [
 active_replicas = list(ALL_INITIAL_REPLICAS)
 dead_replicas = []
 
-# Cache for event deduplication [cite: 71, 98]
 recent_events_cache = deque(maxlen=100)
 seen_sensors_cache: set[str] = set()
 
@@ -74,13 +73,11 @@ class ConnectionManager:
             log.info(f"Dashboard disconnected. Total: {len(self.active_connections)}")
 
     async def broadcast(self, message: dict):
-        """Broadcasts the event to all connected frontends[cite: 113]."""
         json_message = json.dumps(message, default=str)
         for connection in self.active_connections:
             try:
                 await connection.send_text(json_message)
             except Exception:
-                # Silent handling of unclean disconnections
                 pass
 
 
@@ -215,7 +212,7 @@ async def persist_event(payload: dict) -> str:
 
 
 # ==========================================
-# 5. HEALTH CHECK TASK (Fault Tolerance [cite: 105, 106, 137])
+# 5. HEALTH CHECK TASK
 # ==========================================
 async def ping_replicas_continuously():
     """Refresh replica health from a fixed set of local ports."""
@@ -235,7 +232,6 @@ async def ping_replicas_continuously():
                     else:
                         unreachable_replicas.append(replica_url)
                 except Exception as e:
-                    # Cattura qualsiasi errore di rete o connessione per prevenire il crash del task
                     log.warning(f"Health check fallito per {replica_url}: {e}")
                     unreachable_replicas.append(replica_url)
 
@@ -265,20 +261,17 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown sequence
     health_task.cancel()
     if db_pool:
         await db_pool.close()
     log.info("Gateway shutting down.")
 
 
-# Initialize FastAPI App (CRITICAL FIX - THIS WAS MISSING!)
 app = FastAPI(title="Seismic Intelligence Gateway", lifespan=lifespan)
 
-# Add CORS Middleware to allow React dashboard communication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust in production to the specific frontend URL
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -304,10 +297,6 @@ async def register_sensor(payload: dict):
 
 @app.post("/api/events")
 async def receive_event(payload: dict):
-    """
-    Entry point for seismic alerts.
-    Implements deduplication to handle multiple replicas[cite: 71, 98].
-    """
     sensor_id = payload.get("sensor_id")
     event_id = payload.get("event_id")
 
@@ -323,7 +312,6 @@ async def receive_event(payload: dict):
     normalized_payload = dict(payload)
     normalized_payload["event_id"] = event_id
 
-    # Duplicate check
     if event_id in recent_events_cache:
         log.info(
             "DUPLICATE: event_id=%s type=%s sensor=%s amp=%s",
@@ -362,7 +350,6 @@ async def receive_event(payload: dict):
         live_payload.get("peak_amplitude"),
     )
 
-    # Forward to Live Feed via WebSocket [cite: 110]
     await ws_manager.broadcast(live_payload)
 
     return {"status": "dispatched", "event_id": event_id}
@@ -370,7 +357,6 @@ async def receive_event(payload: dict):
 
 @app.get("/api/system/status")
 async def get_system_status():
-    """Node status monitoring for the dashboard[cite: 109]."""
     return {
         "status": "operational" if active_replicas else "critical",
         "configured_replicas": ALL_INITIAL_REPLICAS,
@@ -413,14 +399,9 @@ async def get_historical_events(
     max_freq: Optional[float] = None,
     limit: int = 100,
 ):
-    """
-    Retrieves the history of seismic events with advanced filters.
-    Joins the 'events' table with 'sensors' to filter by region as well[cite: 111, 112].
-    """
     if not db_pool:
         return {"error": "Database connection unavailable"}
 
-    # Base query with JOIN between events and sensors
     query = """
         SELECT 
             e.id, e.event_id, e.sensor_id, e.event_type, e.last_sample_timestamp, 
@@ -431,7 +412,6 @@ async def get_historical_events(
         WHERE 1=1
     """
 
-    # Build filters dynamically for asyncpg ($1, $2, etc.)
     params = []
 
     if start_time:
@@ -462,20 +442,17 @@ async def get_historical_events(
         params.append(max_freq)
         query += f" AND e.peak_frequency <= ${len(params)}"
 
-    # Order from newest to oldest and apply the limit
     params.append(limit)
     query += f" ORDER BY e.last_sample_timestamp DESC LIMIT ${len(params)}"
 
-    # Execute the query on the database
     async with db_pool.acquire() as conn:
         records = await conn.fetch(query, *params)
 
-    # Format the results into a list of JSON-friendly dictionaries
     results = [dict(record) for record in records]
 
     return {
         "count": len(results),
-        "filters_applied": len(params) - 1,  # Exclude 'limit' from the filter count
+        "filters_applied": len(params) - 1,
         "data": results,
     }
 
