@@ -17,6 +17,8 @@ The implemented system is based on the following architectural principles:
 
 Relevant LoFi mockups are available in `booklets/mockup/` and cover the main dashboard views: Sensors, Historical Events, Event Details, and System Health.
 
+The deployed topology is defined in `source/docker-compose.yml`.
+
 # USER STORIES:
 
 ## Operator
@@ -46,7 +48,7 @@ Relevant LoFi mockups are available in `booklets/mockup/` and cover the main das
 
 ### System Monitoring and Fault Tolerance
 
-16) As an Administrator, I want to see the current live monitoring status in the dashboard, so that I can quickly understand whether the system is operating correctly.
+16) As an Administrator, I want to see the current live monitoring status in the system health status dashboard, so that I can quickly understand whether the system is operating correctly.
 17) As an Administrator, I want the historical event list to show only one consolidated record for each detected event, so that the event history remains clear and free of duplicates.
 18) As an Administrator, I want to see the status of all processing replicas in the dashboard, so that I can immediately identify which nodes are currently available.
 19) As an Administrator, I want the dashboard to highlight the timestamp when a processing replica becomes unavailable, so that node failures are clearly traceable.

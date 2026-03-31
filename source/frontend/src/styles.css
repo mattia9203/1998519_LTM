@@ -270,6 +270,24 @@ select {
   letter-spacing: 0.01em;
 }
 
+.pill--event-earthquake {
+  background: #f6d7d6;
+  border-color: #d8837b;
+  color: #8f2d27;
+}
+
+.pill--event-explosion {
+  background: #f5e8b8;
+  border-color: #d7be5b;
+  color: #7c6200;
+}
+
+.pill--event-nuclear {
+  background: #d8ead8;
+  border-color: #7db07d;
+  color: #2d6c34;
+}
+
 .secondary-button,
 .primary-button {
   background: var(--button-bg);

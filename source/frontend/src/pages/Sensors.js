@@ -7,6 +7,7 @@ import {
   formatFrequency,
   sensorDisplayId,
   eventTypeBadge,
+  eventTypePillClass,
 } from "../utils/platform";
 
 const categoryRank = {
@@ -160,7 +161,17 @@ export default function Sensors() {
                   <div className="data-list__item">
                     <span className="data-list__label">Last Event</span>
                     <span className="data-list__value data-list__value--muted">
-                      {latestEvent ? eventTypeBadge(latestEvent.event_type) : "No recent event"}
+                      {latestEvent ? (
+                        <span
+                          className={`pill ${eventTypePillClass(
+                            latestEvent.event_type
+                          )}`}
+                        >
+                          {eventTypeBadge(latestEvent.event_type)}
+                        </span>
+                      ) : (
+                        "No recent event"
+                      )}
                     </span>
                   </div>
 

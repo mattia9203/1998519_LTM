@@ -4,6 +4,12 @@ const EVENT_TYPE_LABELS = {
   nuclear_like: "Nuclear-like",
 };
 
+const EVENT_TYPE_PILL_CLASSES = {
+  earthquake: "pill--event-earthquake",
+  conventional_explosion: "pill--event-explosion",
+  nuclear_like: "pill--event-nuclear",
+};
+
 export const EVENT_TYPE_OPTIONS = [
   { value: "", label: "Earthquake / Explosion / Nuclear" },
   { value: "earthquake", label: "Earthquake" },
@@ -26,6 +32,9 @@ export const eventTypeLabel = (type) =>
   EVENT_TYPE_LABELS[type] || "Unknown event";
 
 export const eventTypeBadge = (type) => eventTypeLabel(type).toUpperCase();
+
+export const eventTypePillClass = (type) =>
+  EVENT_TYPE_PILL_CLASSES[type] || "";
 
 export const categoryLabel = (value) => {
   if (!value) {

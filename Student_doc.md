@@ -36,7 +36,7 @@ The deployed topology is defined in `source/docker-compose.yml`.
 13) As an Operator, I want to filter historical events by sensor, so that I can investigate the activity associated with a specific seismic device.
 14) As an Operator, I want to filter historical events by region, so that I can focus my analysis on a specific geographic area.
 15) As an Operator, I want to filter historical events by peak amplitude, so that I can focus my analysis on the strongest threats.
-16) As an Administrator, I want to see the current live monitoring status in the dashboard, so that I can quickly understand whether the system is operating correctly.
+16) As an Administrator, I want to see the current live monitoring status in the system health status dashboard, so that I can quickly understand whether the system is operating correctly.
 17) As an Administrator, I want the historical event list to show only one consolidated record for each detected event, so that the event history remains clear and free of duplicates.
 18) As an Administrator, I want to see the status of all processing replicas in the dashboard, so that I can immediately identify which nodes are currently available.
 19) As an Administrator, I want the dashboard to highlight the timestamp when a processing replica becomes unavailable, so that node failures are clearly traceable.
@@ -50,15 +50,15 @@ The deployed topology is defined in `source/docker-compose.yml`.
 Provided seismic signal simulator used as the external source of sensors, live measurements, and shutdown commands.
 
 ### USER STORIES:
-1, 2, 3, 4, 5, 6, 16, 18, 19, 20
+Provides sensor discovery data for user stories: 1, 2, 3. Provides live sample streams that feed user stories: 5, 6, 8, 9. Provides shutdown control input that stresses user stories: 16, 18, 19, 20.
 
 ### PORTS:
 8080:8080
 
 ### DESCRIPTION:
-The platform uses the Docker image `seismic-signal-simulator:multiarch_v1` as the external simulator. It exposes the discovery API, the per-sensor WebSocket streams, the SSE control stream used by the replicas, and a health endpoint with runtime configuration.
+The platform uses the Docker Hub public image `mattia9203/seismic-signal-simulator:multiarch_v1` as the external simulator. It exposes the discovery API, the per-sensor WebSocket streams, the SSE control stream used by the replicas, and a health endpoint with runtime configuration.
 
-### PERSISTANCE EVALUATION
+### PERSISTENCE EVALUATION
 The simulator is used as an external stateless component and does not require persistence in our deployment.
 
 ### EXTERNAL SERVICES CONNECTIONS
@@ -76,10 +76,10 @@ No external service connections are implemented for this container.
 
 | HTTP METHOD | URL | Description | User Stories |
 | ----------- | --- | ----------- | ------------ |
-| GET | /api/devices/ | Returns the list of available sensors and their metadata. | 1, 2, 3 |
-| WS | /api/device/{sensor_id}/ws | Streams live samples for a specific sensor. | 4, 5, 6 |
-| GET | /api/control | SSE stream used by replicas to receive shutdown commands. | 18, 19, 20 |
-| GET | /health | Returns simulator status and runtime configuration. | 16 |
+| GET | /api/devices/ | Returns the list of available sensors and their metadata. | Supports 1, 2, 3 |
+| WS | /api/device/{sensor_id}/ws | Streams live samples for a specific sensor. | Feeds 5, 6, 8, 9 |
+| GET | /api/control | SSE stream used by replicas to receive shutdown commands. | Triggers 16, 18, 19, 20 |
+| GET | /health | Returns simulator status and runtime configuration. | Indirect operational support for 16, 18, 19, 20 |
 
 
 ## CONTAINER_NAME: Custom-Broker
@@ -88,7 +88,7 @@ No external service connections are implemented for this container.
 Collects sensor metadata and live measurements from the simulator and redistributes them to all connected processing replicas.
 
 ### USER STORIES:
-1, 2, 3, 4, 5, 6, 8, 9, 16, 18, 19, 20
+Handles discovery fan-out and measurement broadcast for user stories: 1, 2, 3, 5, 6, 8, 9.
 
 ### PORTS:
 9000:9000
@@ -96,7 +96,7 @@ Collects sensor metadata and live measurements from the simulator and redistribu
 ### DESCRIPTION:
 The Custom-Broker container is responsible for discovery and ingestion only. It calls the simulator discovery API, opens one WebSocket stream for each sensor, normalizes each incoming sample into a measurement envelope, and broadcasts that envelope to all connected replicas.
 
-### PERSISTANCE EVALUATION
+### PERSISTENCE EVALUATION
 The Custom-Broker container is stateless. It does not persist measurements, detections, or sensor metadata.
 
 ### EXTERNAL SERVICES CONNECTIONS
@@ -116,8 +116,7 @@ The service starts a WebSocket server for replicas, waits until the expected num
 
 | HTTP METHOD | URL | Description | User Stories |
 | ----------- | --- | ----------- | ------------ |
-| WS | /ws/ingest | Internal WebSocket endpoint used by replicas to connect and receive live measurements. | 16, 18, 19, 20 |
-
+| WS | /ws/ingest | Internal WebSocket endpoint used by replicas to connect and receive normalized live measurements. | Feeds 1, 2, 3, 5, 6, 8, 9 |
 
 ## CONTAINER_NAME: Processing-Replica-Cluster
 
@@ -125,7 +124,7 @@ The service starts a WebSocket server for replicas, waits until the expected num
 Set of five identical processing containers that perform sliding-window analysis, FFT-based classification, persistence, and alert forwarding.
 
 ### USER STORIES:
-4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20
+Performs detection, classification, persistence, and gateway forwarding for user stories: 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17. Exposes replica health and reacts to shutdown commands for user stories: 16, 18, 19, 20.
 
 ### PORTS:
 Each replica exposes `/health` on port `8000`. In the Docker Compose deployment this port is used only inside the Docker network, so the replicas are reached by service name and no host port is published.
@@ -133,7 +132,7 @@ Each replica exposes `/health` on port `8000`. In the Docker Compose deployment 
 ### DESCRIPTION:
 The deployed system starts five instances of the same processing service: `replica-1`, `replica-2`, `replica-3`, `replica-4`, and `replica-5`. Each replica receives the same measurement stream from the broker, maintains a per-sensor sliding window, runs FFT analysis, classifies detected disturbances, writes detections to PostgreSQL, sends alerts to the gateway, and exposes a health endpoint.
 
-### PERSISTANCE EVALUATION
+### PERSISTENCE EVALUATION
 The processing replicas do not store state locally on disk. Persistent data is delegated to PostgreSQL. In-memory state is limited to sensor windows, counters, caches, and the HTTP and DB client pools.
 
 ### EXTERNAL SERVICES CONNECTIONS
@@ -158,7 +157,7 @@ The service consumes the broker stream continuously, stores a fixed-size window 
 
 | HTTP METHOD | URL | Description | User Stories |
 | ----------- | --- | ----------- | ------------ |
-| GET | /health | Returns the replica health status used by the gateway for cluster monitoring. | 18, 19, 20 |
+| GET | /health | Returns the replica health status used by the gateway for cluster monitoring. | Supports 16, 18, 19, 20 |
 
 
 ## CONTAINER_NAME: Gateway
@@ -167,7 +166,7 @@ The service consumes the broker stream continuously, stores a fixed-size window 
 Single entry point for the frontend. Exposes historical APIs, event details, cluster status, and the live WebSocket feed.
 
 ### USER STORIES:
-1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
+Aggregates dashboard APIs and live feeds for user stories: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20. Enforces consolidated live event delivery for user story: 17.
 
 ### PORTS:
 8001:8001
@@ -175,7 +174,7 @@ Single entry point for the frontend. Exposes historical APIs, event details, clu
 ### DESCRIPTION:
 The Gateway container receives detected events from the replicas, suppresses duplicate live alerts, exposes read-only APIs over the PostgreSQL data, monitors replica health, and broadcasts live events to connected dashboard clients. It is the only backend service directly accessed by the frontend.
 
-### PERSISTANCE EVALUATION
+### PERSISTENCE EVALUATION
 The Gateway container does not own persistent storage. It reads historical data from PostgreSQL and keeps only a short in-memory cache for live duplicate suppression and the current replica-health state.
 
 ### EXTERNAL SERVICES CONNECTIONS
@@ -195,12 +194,12 @@ The service exposes REST APIs for historical queries and event details, a live W
 
 | HTTP METHOD | URL | Description | User Stories |
 | ----------- | --- | ----------- | ------------ |
-| POST | /api/events | Receives detected events from the replicas. | 17 |
-| GET | /api/system/status | Returns the health summary of the processing cluster. | 16, 18, 19, 20 |
-| WS | /ws/live | Pushes live deduplicated events to the dashboard. | 5, 6, 17 |
-| GET | /api/history | Returns persisted historical events with filters by time, sensor, region, event type, and frequency. | 10, 11, 12, 13, 14 |
-| GET | /api/sensors | Returns the persisted sensor list. | 1, 2, 3 |
-| GET | /api/events/{event_id} | Returns the details of a single event. | 7, 8, 9 |
+| POST | /api/events | Receives detected events from the replicas. | Supports 17 |
+| GET | /api/system/status | Returns the aggregated health summary of the processing cluster. | Supports 4, 16, 18, 19, 20 |
+| WS | /ws/live | Pushes live deduplicated events to the dashboard. | Feeds 5, 6, 8, 9, 17 |
+| GET | /api/history | Returns persisted historical events with filters by time, sensor, region, event type, and frequency; the frontend applies the minimum-amplitude filter locally. | Supports 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17 |
+| GET | /api/sensors | Returns the persisted sensor list. | Supports 1, 2, 3, 13, 14 |
+| GET | /api/events/{event_id} | Returns the details of a single event. | Supports 7, 8, 9 |
 
 
 ## CONTAINER_NAME: PostgreSQL
@@ -209,7 +208,7 @@ The service exposes REST APIs for historical queries and event details, a live W
 Persistent storage used for sensor metadata and detected events.
 
 ### USER STORIES:
-1, 2, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17
+Persists sensor metadata and event history for user stories: 1, 2, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15. Enforces unique event storage together with replica-side idempotency for user story: 17.
 
 ### PORTS:
 5432:5432
@@ -217,7 +216,7 @@ Persistent storage used for sensor metadata and detected events.
 ### DESCRIPTION:
 The PostgreSQL container stores the consolidated state of the platform. It keeps the registered sensors and the deduplicated list of detected events. Persistence is enabled through the Docker volume `postgres-data` and the schema is initialized by `source/init.sql`.
 
-### PERSISTANCE EVALUATION
+### PERSISTENCE EVALUATION
 This container is the persistent core of the platform. It guarantees history retention across service restarts and is essential for duplicate-safe event storage.
 
 ### EXTERNAL SERVICES CONNECTIONS
@@ -245,7 +244,7 @@ Standard PostgreSQL 16 Alpine image.
 React-based dashboard used by operators and administrators to monitor the system, inspect events, and view replica health.
 
 ### USER STORIES:
-1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
+Implements operator-facing dashboard views for user stories: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15. Implements administrator monitoring views for user stories: 16, 17, 18, 19, 20.
 
 ### PORTS:
 3000:80
@@ -253,7 +252,7 @@ React-based dashboard used by operators and administrators to monitor the system
 ### DESCRIPTION:
 The Frontend container serves the dashboard through Nginx. It proxies all API calls and live WebSocket traffic to the gateway, so the browser interacts with the system through a single access point. The implemented pages are Sensors, Historical Events, Event Details, and System Health.
 
-### PERSISTANCE EVALUATION
+### PERSISTENCE EVALUATION
 The Frontend container does not require persistence. All durable state is delegated to the backend services.
 
 ### EXTERNAL SERVICES CONNECTIONS
@@ -268,13 +267,12 @@ The Frontend container connects only to the Gateway through the Nginx reverse pr
 - TECHNOLOGICAL SPECIFICATION:
 The frontend is developed with React and React Router. Production serving is performed through Nginx, which proxies `/api/*` and `/ws/live` to the gateway.
 - SERVICE ARCHITECTURE:
-The dashboard is implemented as a single-page application with four main views. The Sensors page aggregates persisted sensors and latest events, the Historical Events page combines persisted history with live WebSocket updates, the Event Details page shows a detailed event view, and the System Health page polls the gateway periodically to display replica availability.
+The dashboard is implemented as a single-page application with four main views. The Sensors page aggregates persisted sensors and latest events, the Historical Events page combines persisted history with live WebSocket updates, the Event Details page shows a detailed event view, and a shared React context polls the gateway periodically to feed the System Health page with replica availability data.
 - PAGES:
 
 | Name | Description | Related Microservice | User Stories |
 | ---- | ----------- | -------------------- | ------------ |
-| Sensors | Displays sensor cards, summary metrics, categories, region, coordinates, latest event, and dominant frequency. | frontend | 1, 2, 3, 5, 6, 16 |
-| Historical Events | Displays persisted events and live updates with event type, sensor, region, and amplitude-oriented filtering. | frontend | 10, 11, 12, 13, 14, 15, 17 |
-| Event Details | Displays classification, amplitude, timestamps, and sensor context for a selected event. | frontend | 7, 8, 9 |
-| System Health | Displays replica counts, availability, timestamps of failures, and cluster health events. | frontend | 16, 18, 19, 20 |
-
+| Sensors | Displays sensor cards, summary metrics, category, region, coordinates, latest event, dominant frequency, and live monitoring status. | frontend | Implements 1, 2, 3, 4, 5, 6 |
+| Historical Events | Displays persisted events plus live updates with classification, timestamp, dominant frequency, peak amplitude, and filters by event type, sensor, region, and client-side minimum amplitude. | frontend | Implements 8, 9, 10, 11, 12, 13, 14, 15, 17 |
+| Event Details | Displays a detailed view of the selected event with classification, timestamps, peak amplitude, and sensor context. | frontend | Implements 7, 8, 9 |
+| System Health | Displays current live monitoring status, replica counts, availability, failure timestamps, and cluster health events. | frontend | Implements 4, 16, 18, 19, 20 |

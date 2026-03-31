@@ -5,6 +5,7 @@ import {
   EVENT_TYPE_OPTIONS,
   buildHistorySearch,
   eventTypeBadge,
+  eventTypePillClass,
   formatAmplitude,
   formatFrequency,
   formatCompactTimestamp,
@@ -236,7 +237,11 @@ export default function History() {
                 <tr key={event.event_id}>
                   <td>{formatCompactTimestamp(event.last_sample_timestamp)}</td>
                   <td>
-                    <span className="pill">{eventTypeBadge(event.event_type)}</span>
+                    <span
+                      className={`pill ${eventTypePillClass(event.event_type)}`}
+                    >
+                      {eventTypeBadge(event.event_type)}
+                    </span>
                   </td>
                   <td>{sensorDisplayId(event.sensor_id)}</td>
                   <td>{formatFrequency(event.peak_frequency)}</td>
