@@ -7,6 +7,7 @@ import {
   eventTypeLabel,
   formatAmplitude,
   formatCoordinates,
+  formatEventDisplayId,
   formatFrequency,
   formatUtcTimestamp,
   sensorDisplayId,
@@ -117,7 +118,9 @@ export default function EventDetail() {
         <div className="event-header-card">
           <div className="event-header-card__identity">
             <div className="data-list__label">Event ID</div>
-            <div className="event-header-card__event-id">{event.event_id}</div>
+            <div className="event-header-card__event-id" title={event.event_id}>
+              {formatEventDisplayId(event.event_id)}
+            </div>
           </div>
 
           <span className="pill">{eventTypeBadge(event.event_type)}</span>
@@ -161,7 +164,7 @@ export default function EventDetail() {
 
               <div className="detail-list__item">
                 <span className="detail-list__label">Peak Amplitude</span>
-                <span className="detail-list__value detail-list__value--accent">
+                <span className="detail-list__value">
                   {formatAmplitude(event.peak_amplitude, event.measurement_unit)}
                 </span>
               </div>
@@ -195,7 +198,9 @@ export default function EventDetail() {
 
               <div className="detail-list__item">
                 <span className="detail-list__label">Last Sensor Event</span>
-                <span className="detail-list__value">{event.event_id}</span>
+                <span className="detail-list__value" title={event.event_id}>
+                  {formatEventDisplayId(event.event_id)}
+                </span>
               </div>
 
               <div className="detail-list__item">
@@ -205,8 +210,13 @@ export default function EventDetail() {
 
               <div className="detail-list__item">
                 <span className="detail-list__label">Previous Event</span>
-                <span className="detail-list__value">
-                  {previousEvent?.event_id || "N/A"}
+                <span
+                  className="detail-list__value"
+                  title={previousEvent?.event_id || undefined}
+                >
+                  {previousEvent?.event_id
+                    ? formatEventDisplayId(previousEvent.event_id)
+                    : "N/A"}
                 </span>
               </div>
 

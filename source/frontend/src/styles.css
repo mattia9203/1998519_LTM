@@ -9,6 +9,8 @@
   --text-tertiary: #8c867f;
   --accent: #ff6868;
   --accent-soft: #ffb0b0;
+  --selected-surface: #ddd8d2;
+  --selected-border: #b4ada5;
   --button-bg: #ece9e4;
   --shadow-soft: 0 1px 2px rgba(23, 23, 23, 0.05);
 }
@@ -240,10 +242,6 @@ select {
   color: var(--text-secondary);
 }
 
-.detail-list__value--accent {
-  color: var(--accent);
-}
-
 .sensor-card__actions {
   display: grid;
   gap: 12px;
@@ -316,7 +314,8 @@ select {
 }
 
 .filter-control.is-active {
-  background: var(--accent);
+  background: var(--selected-surface);
+  border-color: var(--selected-border);
 }
 
 .filter-control.is-active .filter-control__label,

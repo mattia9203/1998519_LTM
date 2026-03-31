@@ -75,6 +75,14 @@ export const formatAmplitude = (value, unit = "mm/s") => {
   return `${Number(value).toFixed(1)} ${unit}`;
 };
 
+export const formatEventDisplayId = (value, visibleLength = 10) => {
+  if (!value) {
+    return "N/A";
+  }
+
+  return String(value).slice(0, visibleLength);
+};
+
 export const formatCompactTimestamp = (value) => {
   const parsed = asDate(value);
 

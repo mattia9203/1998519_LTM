@@ -31,12 +31,14 @@ export default function Layout({ children }) {
             );
           })}
 
-          <div
-            className={`platform-nav__link platform-nav__link--static${isEventPage ? " is-active" : ""}`}
-            aria-current={isEventPage ? "page" : undefined}
-          >
-            Event Details
-          </div>
+          {isEventPage && (
+            <div
+              className="platform-nav__link platform-nav__link--static is-active"
+              aria-current="page"
+            >
+              Event Details
+            </div>
+          )}
         </nav>
       </aside>
 
