@@ -1,17 +1,51 @@
 import React, { useContext } from "react";
 import { HealthContext } from "../App";
 import { formatCompactTimestamp } from "../utils/platform";
+import SummaryGrid from "../components/ui/SummaryGrid";
+import SummaryCard from "../components/ui/SummaryCard";
+import StatusBadge from "../components/ui/StatusBadge";
+import Skeleton from "../components/ui/Skeleton";
+import ErrorMessage from "../components/ui/ErrorMessage";
+import styles from "./Health.module.css";
 
 export default function Health() {
   // Leggiamo i dati in tempo reale dal Context globale
-  const { summary, replicaRows, healthEvents } = useContext(HealthContext);
+  const { summary, replicaRows, healthEvents, error } = useContext(HealthContext);
+
+  if (error) {
+    return (
+      <div className="page-shell">
+        <header className="page-header page-header--split">
+          <div><h1 className="page-title">System Health</h1></div>
+          <StatusBadge label="ADMIN" />
+        </header>
+        <section className="page-section">
+          <ErrorMessage message={error} />
+        </section>
+      </div>
+    );
+  }
 
   if (!summary) {
     return (
       <div className="page-shell">
-        <header className="page-header">
-          <h1 className="page-title">System Health</h1>
+        <header className="page-header page-header--split">
+          <div><h1 className="page-title">System Health</h1></div>
+          <StatusBadge label="ADMIN" />
         </header>
+        <section className="page-section">
+          <div className="section-label">Summary</div>
+          <SummaryGrid>
+            <Skeleton height="104px" />
+            <Skeleton height="104px" />
+            <Skeleton height="104px" />
+            <Skeleton height="104px" />
+          </SummaryGrid>
+        </section>
+        <section className="page-section">
+          <div className="section-label">Replica Status</div>
+          <Skeleton height="200px" />
+        </section>
       </div>
     );
   }
@@ -22,43 +56,28 @@ export default function Health() {
   const liveData = healthyReplicas > 0 ? "Active" : "Unavailable";
 
   return (
-    <div className="page-shell">
+    <div className="page-shell" style={{ height: "calc(100vh - 66px)", overflow: "hidden" }}>
       <header className="page-header page-header--split">
         <div>
           <h1 className="page-title">System Health</h1>
         </div>
-        <span className="pill">ADMIN</span>
+        <StatusBadge label="ADMIN" />
       </header>
 
       <section className="page-section">
         <div className="section-label">Summary</div>
 
-        <div className="summary-grid">
-          <div className="summary-card">
-            <div className="summary-card__label">Total Replicas</div>
-            <div className="summary-card__value">{totalReplicas}</div>
-          </div>
-
-          <div className="summary-card">
-            <div className="summary-card__label">Healthy</div>
-            <div className="summary-card__value">{healthyReplicas}</div>
-          </div>
-
-          <div className="summary-card">
-            <div className="summary-card__label">Unavailable</div>
-            <div className="summary-card__value">{unavailableReplicas}</div>
-          </div>
-
-          <div className="summary-card">
-            <div className="summary-card__label">Live Data</div>
-            <div 
-              className="summary-card__value" 
-              style={{ color: liveData === "Active" ? "#00e676" : "#ff4444" }}
-            >
-              {liveData}
-            </div>
-          </div>
-        </div>
+        <SummaryGrid>
+          <SummaryCard label="Total Replicas" value={totalReplicas} />
+          <SummaryCard label="Healthy" value={healthyReplicas} />
+          <SummaryCard label="Unavailable" value={unavailableReplicas} />
+          <SummaryCard
+            label="Live Data"
+            value={liveData}
+            isAccent
+            accentColor={liveData === "Active" ? "#00e676" : "#ff4444"}
+          />
+        </SummaryGrid>
       </section>
 
       <section className="page-section">
@@ -79,9 +98,9 @@ export default function Health() {
                 <tr key={row.id}>
                   <td>{row.id}</td>
                   <td>
-                    <span className="pill">
-                      {row.status === "healthy" ? "HEALTHY" : "UNAVAILABLE"}
-                    </span>
+                    <StatusBadge
+                      label={row.status === "healthy" ? "HEALTHY" : "UNAVAILABLE"}
+                    />
                   </td>
                   <td>
                     {row.lastHeartbeat
@@ -100,18 +119,17 @@ export default function Health() {
         </div>
       </section>
 
-      <section className="page-section">
-        <div className="section-label">Health Events</div>
-
-        <div className="health-log">
+      <section className="page-section" style={{ flex: 1, minHeight: 0 }}>
+        <div className="section-label">Component Status</div>
+        <div className={styles.healthLog} style={{ height: "100%" }}>
           {healthEvents.length ? (
             healthEvents.map((entry) => (
-              <div key={entry} className="health-log__entry">
+              <div key={entry} className={styles.healthLogEntry}>
                 {entry}
               </div>
             ))
           ) : (
-            <div className="health-log__entry">
+            <div className={styles.healthLogEntry}>
               Live monitoring active. Waiting for replica state changes.
             </div>
           )}

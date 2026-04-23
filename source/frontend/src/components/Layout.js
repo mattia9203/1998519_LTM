@@ -1,5 +1,6 @@
 import React from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, NavLink } from "react-router-dom";
+import styles from "./Layout.module.css";
 
 const navItems = [
   { to: "/sensors", label: "Sensors" },
@@ -12,28 +13,26 @@ export default function Layout({ children }) {
   const isEventPage = location.pathname.startsWith("/event/");
 
   return (
-    <div className="app-shell">
-      <aside className="platform-sidebar">
-        <div className="platform-brand">Seismic Platform</div>
+    <div className={styles.appShell}>
+      <aside className={styles.platformSidebar}>
+        <div className={styles.platformBrand}>Seismic Platform</div>
 
-        <nav className="platform-nav" aria-label="Primary navigation">
-          {navItems.map((item) => {
-            const isActive = location.pathname.startsWith(item.to);
-
-            return (
-              <Link
-                key={item.to}
-                to={item.to}
-                className={`platform-nav__link${isActive ? " is-active" : ""}`}
-              >
-                {item.label}
-              </Link>
-            );
-          })}
+        <nav className={styles.platformNav} aria-label="Primary navigation">
+          {navItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                `${styles.platformNavLink}${isActive ? ` ${styles.platformNavLinkActive}` : ""}`
+              }
+            >
+              {item.label}
+            </NavLink>
+          ))}
 
           {isEventPage && (
             <div
-              className="platform-nav__link platform-nav__link--static is-active"
+              className={`${styles.platformNavLink} ${styles.platformNavLinkStatic} ${styles.platformNavLinkActive}`}
               aria-current="page"
             >
               Event Details
@@ -42,7 +41,7 @@ export default function Layout({ children }) {
         </nav>
       </aside>
 
-      <main className="platform-content">{children}</main>
+      <main className={styles.platformContent}>{children}</main>
     </div>
   );
 }

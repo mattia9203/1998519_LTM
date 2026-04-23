@@ -1,0 +1,224 @@
+:root {
+  --app-bg: #f7f4ef;
+  --panel-bg: #fffdfb;
+  --sidebar-bg: #efede8;
+  --border: #cdc7bf;
+  --border-strong: #a8a097;
+  --text-primary: #171717;
+  --text-secondary: #66625c;
+  --text-tertiary: #8c867f;
+  --accent: #ff6868;
+  --accent-soft: #ffb0b0;
+  --selected-surface: #ddd8d2;
+  --selected-border: #b4ada5;
+  --button-bg: #ece9e4;
+  --shadow-soft: 0 1px 2px rgba(23, 23, 23, 0.05);
+}
+
+* {
+  box-sizing: border-box;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+body {
+  background: var(--app-bg);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+a {
+  color: inherit;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Page Shell & Typography */
+.page-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.page-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.page-header--split {
+  align-items: flex-start;
+  flex-direction: row;
+  justify-content: space-between;
+}
+
+.page-title {
+  margin: 0;
+  font-size: clamp(2.1rem, 1.8rem + 1.1vw, 3.25rem);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 0.95;
+}
+
+.page-subtitle {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 15px;
+}
+
+.page-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.section-label {
+  color: var(--text-secondary);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* Common Card Base Style */
+.card-base {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-soft);
+}
+
+/* Buttons */
+.secondary-button,
+.primary-button,
+.table-action {
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  display: inline-flex;
+  font-weight: 800;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.secondary-button,
+.primary-button {
+  background: var(--button-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  min-height: 44px;
+  padding: 0 22px;
+}
+
+.primary-button {
+  min-width: 160px;
+}
+
+.primary-button--inline {
+  min-width: 300px;
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.table-action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  justify-content: flex-start;
+  min-height: auto;
+}
+
+/* Tables */
+.table-shell {
+  overflow: hidden;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-soft);
+}
+
+.table-shell--scrollable {
+  max-height: 468px;
+  overflow: auto;
+}
+
+.platform-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.platform-table th,
+.platform-table td {
+  padding: 20px 26px;
+  border-bottom: 1px solid #ddd7d0;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.platform-table th {
+  font-size: 15px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.platform-table td {
+  font-size: 17px;
+}
+
+.platform-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.empty-state {
+  padding: 24px 26px;
+  color: var(--text-secondary);
+}
+
+/* Skeleton & Errors UX */
+@keyframes skeleton-loading {
+  0% { background-color: #efede8; }
+  100% { background-color: #ffffff; }
+}
+
+.skeleton-box {
+  animation: skeleton-loading 1s linear infinite alternate;
+  border-radius: 8px;
+}
+
+.error-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 24px;
+  background: #fffafa;
+  border: 1px solid #f2c7c7;
+  border-radius: 16px;
+  align-items: flex-start;
+}
+
+@media (max-width: 1320px) {
+  .primary-button--inline {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+@media (max-width: 680px) {
+  .platform-table th,
+  .platform-table td {
+    padding: 16px 14px;
+    font-size: 14px;
+  }
+}

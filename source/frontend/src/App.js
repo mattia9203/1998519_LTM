@@ -1,13 +1,14 @@
-import React, { createContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useEffect, useRef, useState, useMemo } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Sensors from './pages/Sensors';
 import History from './pages/History';
 import EventDetail from './pages/EventDetail';
 import Health from './pages/Health';
+import GlobalErrorBoundary from './components/GlobalErrorBoundary';
 import { API_BASE } from './config';
 import { formatCompactTimestamp, replicaLabel } from './utils/platform';
-import './styles.css';
+import './global.css';
 
 // 1. Creiamo un Context globale per la salute del sistema
 export const HealthContext = createContext();
@@ -21,11 +22,13 @@ function HealthProvider({ children }) {
     const saved = sessionStorage.getItem("healthEvents");
     return saved ? JSON.parse(saved) : [];
   });
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     const fetchHealth = async () => {
       try {
         const response = await fetch(`${API_BASE}/system/status`);
+        if (!response.ok) throw new Error("Endpoint returned an error");
         const payload = await response.json();
         const receivedAt = new Date().toISOString();
         const nextReplicaState = {};
@@ -66,8 +69,10 @@ function HealthProvider({ children }) {
             return updatedEvents;
           });
         }
-      } catch (error) {
-        console.error("Global Health Poll Error:", error);
+        setError(null);
+      } catch (err) {
+        console.error("Global Health Poll Error:", err);
+        setError(err.message);
       }
     };
 
@@ -76,8 +81,13 @@ function HealthProvider({ children }) {
     return () => clearInterval(interval);
   }, []);
 
+  const contextValue = useMemo(
+    () => ({ summary, replicaRows, healthEvents, error }),
+    [summary, replicaRows, healthEvents, error]
+  );
+
   return (
-    <HealthContext.Provider value={{ summary, replicaRows, healthEvents }}>
+    <HealthContext.Provider value={contextValue}>
       {children}
     </HealthContext.Provider>
   );
@@ -85,19 +95,21 @@ function HealthProvider({ children }) {
 
 function App() {
   return (
-    <HealthProvider>
-      <Router>
-        <Layout>
-          <Routes>
-            <Route path="/" element={<Navigate to="/sensors" />} />
-            <Route path="/sensors" element={<Sensors />} />
-            <Route path="/history" element={<History />} />
-            <Route path="/event/:id" element={<EventDetail />} />
-            <Route path="/health" element={<Health />} />
-          </Routes>
-        </Layout>
-      </Router>
-    </HealthProvider>
+    <GlobalErrorBoundary>
+      <HealthProvider>
+        <Router>
+          <Layout>
+            <Routes>
+              <Route path="/" element={<Navigate to="/sensors" />} />
+              <Route path="/sensors" element={<Sensors />} />
+              <Route path="/history" element={<History />} />
+              <Route path="/event/:id" element={<EventDetail />} />
+              <Route path="/health" element={<Health />} />
+            </Routes>
+          </Layout>
+        </Router>
+      </HealthProvider>
+    </GlobalErrorBoundary>
   );
 }
 

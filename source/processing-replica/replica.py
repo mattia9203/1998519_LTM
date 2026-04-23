@@ -12,7 +12,6 @@ Responsibilities:
 
 import asyncio
 import hashlib
-import json
 import logging
 import os
 import signal
@@ -22,6 +21,7 @@ from datetime import datetime
 
 import httpx
 import numpy as np
+import orjson
 import websockets
 import uvicorn
 from fastapi import FastAPI
@@ -79,25 +79,93 @@ COOLDOWN_SAMPLES = int(
 # ---------------------------------------------------------------------------
 http_client: httpx.AsyncClient | None = None
 
-# Per-sensor sliding windows  {sensor_id: deque[float]}
-windows: dict[str, deque] = {}
-
-# Tracking counters for the overlapping window
-sample_counters: dict[str, int] = {}
-cooldown_counters: dict[str, int] = {}
-
-# Sampling-rate cache          {sensor_id: float}
-sampling_rates: dict[str, float] = {}
-
-# Sensors already registered through the gateway
-seen_sensors: set[str] = set()
-
 # Asyncio event — set when we need to shut down
 shutdown_event = asyncio.Event()
 http_server: uvicorn.Server | None = None
 resolved_http_port = HTTP_PORT
 resolved_replica_id = f"replica-{resolved_http_port}"
 
+
+# ---------------------------------------------------------------------------
+# Sensor Processor — encapsulates per-sensor state and DFT analysis
+# ---------------------------------------------------------------------------
+class SensorProcessor:
+    """Manages sliding windows, step/cooldown counters, and sampling rates
+    for all sensors. Replaces the previous scattered global dicts."""
+
+    def __init__(
+        self,
+        window_size: int = WINDOW_SIZE,
+        step_size: int = STEP_SIZE,
+        cooldown_samples: int = COOLDOWN_SAMPLES,
+        amplitude_threshold: float = AMPLITUDE_THRESHOLD,
+    ):
+        self.window_size = window_size
+        self.step_size = step_size
+        self.cooldown_samples = cooldown_samples
+        self.amplitude_threshold = amplitude_threshold
+
+        # Per-sensor sliding windows  {sensor_id: deque[float]}
+        self._windows: dict[str, deque] = {}
+        # Tracking counters for the overlapping window
+        self._sample_counters: dict[str, int] = {}
+        self._cooldown_counters: dict[str, int] = {}
+        # Sampling-rate cache  {sensor_id: float}
+        self._sampling_rates: dict[str, float] = {}
+
+    def ingest_sample(
+        self, sensor_id: str, value: float, sampling_rate: float
+    ) -> bool:
+        """Add a sample and return True if the window is ready for DFT analysis."""
+        self._sampling_rates[sensor_id] = sampling_rate
+
+        if sensor_id not in self._windows:
+            self._windows[sensor_id] = deque(maxlen=self.window_size)
+            self._sample_counters[sensor_id] = 0
+            self._cooldown_counters[sensor_id] = 0
+
+        win = self._windows[sensor_id]
+        win.append(value)
+        self._sample_counters[sensor_id] += 1
+
+        if self._cooldown_counters[sensor_id] > 0:
+            self._cooldown_counters[sensor_id] -= 1
+
+        if len(win) < self.window_size:
+            return False
+
+        if self._sample_counters[sensor_id] < self.step_size:
+            return False
+
+        # Reset step counter — window is ready
+        self._sample_counters[sensor_id] = 0
+
+        if self._cooldown_counters[sensor_id] > 0:
+            return False
+
+        return True
+
+    def get_window_snapshot(self, sensor_id: str) -> list[float]:
+        """Return a copy of the current sample window for the given sensor."""
+        return list(self._windows[sensor_id])
+
+    def get_sampling_rate(self, sensor_id: str) -> float:
+        return self._sampling_rates.get(sensor_id, 20.0)
+
+    def activate_cooldown(self, sensor_id: str) -> None:
+        self._cooldown_counters[sensor_id] = self.cooldown_samples
+
+
+# Module-level processor instance
+sensor_processor = SensorProcessor()
+
+# Sensors already registered through the gateway
+seen_sensors: set[str] = set()
+
+
+# ---------------------------------------------------------------------------
+# Health endpoint
+# ---------------------------------------------------------------------------
 health_app = FastAPI(title="Processing Replica Health")
 
 
@@ -181,13 +249,16 @@ def build_event_id(sensor_id: str, timestamp: str | datetime, event_type: str) -
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
-def analyse_window(
-    samples: list[float], sampling_rate: float
+def _analyse_window_sync(
+    samples: list[float], sampling_rate: float, amplitude_threshold: float
 ) -> tuple[float, float] | None:
     """
     Run rfft on `samples`, ignore the DC component (index 0),
     and return (dominant_frequency_hz, peak_amplitude) or None
     if the peak amplitude is below the noise threshold.
+
+    This function is CPU-bound and is meant to be called via
+    asyncio.to_thread() to avoid blocking the event loop.
     """
     arr = np.array(samples, dtype=np.float64)
     spectrum = np.fft.rfft(arr)
@@ -201,10 +272,19 @@ def analyse_window(
     peak_amp = amplitudes[peak_idx]
     peak_freq = freqs[peak_idx]
 
-    if peak_amp < AMPLITUDE_THRESHOLD:
+    if peak_amp < amplitude_threshold:
         return None  # pure noise — do not raise an event
 
     return float(peak_freq), float(peak_amp)
+
+
+async def analyse_window(
+    samples: list[float], sampling_rate: float
+) -> tuple[float, float] | None:
+    """Non-blocking wrapper around the CPU-bound FFT analysis."""
+    return await asyncio.to_thread(
+        _analyse_window_sync, samples, sampling_rate, AMPLITUDE_THRESHOLD
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -215,8 +295,8 @@ def analyse_window(
 async def process_message(raw: str) -> None:
     """Parse one WebSocket message, update state, and trigger event pipeline."""
     try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
+        payload = orjson.loads(raw)
+    except (orjson.JSONDecodeError, ValueError) as exc:
         log.warning("Malformed JSON received: %s", exc)
         return
 
@@ -231,32 +311,12 @@ async def process_message(raw: str) -> None:
 
     asyncio.create_task(register_sensor_with_gateway(payload))
 
-    sampling_rates[sensor_id] = sampling_rate
-
-    if sensor_id not in windows:
-        windows[sensor_id] = deque(maxlen=WINDOW_SIZE)
-        sample_counters[sensor_id] = 0
-        cooldown_counters[sensor_id] = 0
-
-    win = windows[sensor_id]
-    win.append(float(value))
-    sample_counters[sensor_id] += 1
-
-    if cooldown_counters[sensor_id] > 0:
-        cooldown_counters[sensor_id] -= 1
-
-    if len(win) < WINDOW_SIZE:
+    ready = sensor_processor.ingest_sample(sensor_id, float(value), sampling_rate)
+    if not ready:
         return
 
-    if sample_counters[sensor_id] < STEP_SIZE:
-        return
-
-    sample_counters[sensor_id] = 0
-
-    if cooldown_counters[sensor_id] > 0:
-        return
-
-    result = analyse_window(list(win), sampling_rate)
+    samples = sensor_processor.get_window_snapshot(sensor_id)
+    result = await analyse_window(samples, sampling_rate)
     if result is None:
         return
 
@@ -290,9 +350,10 @@ async def process_message(raw: str) -> None:
         peak_amp,
     )
 
-    cooldown_counters[sensor_id] = COOLDOWN_SAMPLES
+    sensor_processor.activate_cooldown(sensor_id)
 
-    await forward_to_gateway(event)
+    # Fire-and-forget: forward without blocking the message processing loop
+    asyncio.create_task(forward_to_gateway(event))
 
 
 # ---------------------------------------------------------------------------
@@ -365,8 +426,8 @@ async def listen_control_stream() -> None:
                         return
                     if sse.event == "command":
                         try:
-                            data = json.loads(sse.data)
-                        except json.JSONDecodeError:
+                            data = orjson.loads(sse.data)
+                        except (orjson.JSONDecodeError, ValueError):
                             continue
                         if data.get("command") == "SHUTDOWN":
                             log.warning(
@@ -387,7 +448,8 @@ async def listen_control_stream() -> None:
         except (httpx.ReadError, httpx.RemoteProtocolError, httpx.ReadTimeout) as exc:
             if shutdown_event.is_set():
                 return
-            pass
+            log.warning("SSE transient error (%s: %s) — retrying in %.1fs",
+                        exc.__class__.__name__, exc, backoff)
         except Exception as exc:
             if shutdown_event.is_set():
                 return

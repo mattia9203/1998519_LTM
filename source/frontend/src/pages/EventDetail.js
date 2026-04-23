@@ -3,7 +3,6 @@ import { useNavigate, useParams } from "react-router-dom";
 import { API_BASE } from "../config";
 import {
   categoryName,
-  eventTypeBadge,
   eventTypeLabel,
   formatAmplitude,
   formatCoordinates,
@@ -12,20 +11,33 @@ import {
   formatUtcTimestamp,
   sensorDisplayId,
 } from "../utils/platform";
+import StatusBadge from "../components/ui/StatusBadge";
+import DataListItem from "../components/ui/DataListItem";
+import Skeleton from "../components/ui/Skeleton";
+import ErrorMessage from "../components/ui/ErrorMessage";
+import styles from "./EventDetail.module.css";
+import dataListItemStyles from "../components/ui/DataListItem.module.css";
 
 export default function EventDetail() {
   const navigate = useNavigate();
   const { id } = useParams();
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [event, setEvent] = useState(null);
   const [relatedEvents, setRelatedEvents] = useState([]);
 
   useEffect(() => {
     const loadEvent = async () => {
       setIsLoading(true);
+      setError(null);
 
       try {
         const response = await fetch(`${API_BASE}/events/${encodeURIComponent(id)}`);
+        
+        if (!response.ok) {
+          throw new Error("Impossible to load event details");
+        }
+
         const payload = await response.json();
 
         if (!payload.data) {
@@ -42,8 +54,9 @@ export default function EventDetail() {
         );
         const historyPayload = await historyResponse.json();
         setRelatedEvents(historyPayload.data || []);
-      } catch (error) {
-        console.error(error);
+      } catch (err) {
+        console.error(err);
+        setError(err.message);
       } finally {
         setIsLoading(false);
       }
@@ -51,6 +64,20 @@ export default function EventDetail() {
 
     loadEvent();
   }, [id]);
+
+  if (error) {
+    return (
+      <div className="page-shell">
+        <header className="page-header">
+          <h1 className="page-title">Event Details</h1>
+        </header>
+
+        <section className="page-section">
+          <ErrorMessage message={error} onRetry={() => window.location.reload()} />
+        </section>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -60,11 +87,15 @@ export default function EventDetail() {
         </header>
 
         <section className="page-section">
-          <div className="detail-panel">
-            <h2 className="detail-panel__title">Loading event</h2>
-            <p className="detail-panel__copy">
-              Fetching the event payload from the gateway.
-            </p>
+          <div className="section-label">Event Header</div>
+          <Skeleton height="76px" />
+        </section>
+
+        <section className="page-section">
+          <div className="section-label">Details</div>
+          <div className={styles.detailPanels}>
+            <Skeleton height="320px" />
+            <Skeleton height="320px" />
           </div>
         </section>
       </div>
@@ -79,9 +110,9 @@ export default function EventDetail() {
         </header>
 
         <section className="page-section">
-          <div className="detail-panel">
-            <h2 className="detail-panel__title">Event not found</h2>
-            <p className="detail-panel__copy">
+          <div className={styles.detailPanel}>
+            <h2 className={styles.detailPanelTitle}>Event not found</h2>
+            <p className={styles.detailPanelCopy}>
               The selected event is not available in the gateway data store.
             </p>
             <button
@@ -115,17 +146,17 @@ export default function EventDetail() {
       <section className="page-section">
         <div className="section-label">Event Header</div>
 
-        <div className="event-header-card">
-          <div className="event-header-card__identity">
-            <div className="data-list__label">Event ID</div>
-            <div className="event-header-card__event-id" title={event.event_id}>
+        <div className={styles.eventHeaderCard}>
+          <div className={styles.eventHeaderInfo}>
+            <div className={dataListItemStyles.dataListLabel}>Event ID</div>
+            <div className={dataListItemStyles.dataListValue} title={event.event_id}>
               {formatEventDisplayId(event.event_id)}
             </div>
           </div>
 
-          <span className="pill">{eventTypeBadge(event.event_type)}</span>
+          <StatusBadge type={event.event_type} />
 
-          <div className="event-header-card__timing">
+          <div className={styles.eventHeaderInfo}>
             <div>Start {formatUtcTimestamp(startTime)}</div>
             <div>End {formatUtcTimestamp(endTime)}</div>
           </div>
@@ -143,89 +174,74 @@ export default function EventDetail() {
       <section className="page-section">
         <div className="section-label">Details</div>
 
-        <div className="detail-panels">
-          <article className="detail-panel">
-            <h2 className="detail-panel__title">Event Data</h2>
+        <div className={styles.detailPanels}>
+          <article className={styles.detailPanel}>
+            <h2 className={styles.detailPanelTitle}>Event Data</h2>
 
-            <div className="detail-list">
-              <div className="detail-list__item">
-                <span className="detail-list__label">Classification</span>
-                <span className="detail-list__value">
-                  {eventTypeLabel(event.event_type)}
-                </span>
-              </div>
-
-              <div className="detail-list__item">
-                <span className="detail-list__label">Dominant Frequency</span>
-                <span className="detail-list__value">
-                  {formatFrequency(event.peak_frequency)}
-                </span>
-              </div>
-
-              <div className="detail-list__item">
-                <span className="detail-list__label">Peak Amplitude</span>
-                <span className="detail-list__value">
-                  {formatAmplitude(event.peak_amplitude, event.measurement_unit)}
-                </span>
-              </div>
+            <div className={dataListItemStyles.dataList}>
+              <DataListItem
+                label="Classification"
+                value={eventTypeLabel(event.event_type)}
+                isDetail
+              />
+              <DataListItem
+                label="Dominant Frequency"
+                value={formatFrequency(event.peak_frequency)}
+                isDetail
+              />
+              <DataListItem
+                label="Peak Amplitude"
+                value={formatAmplitude(event.peak_amplitude, event.measurement_unit)}
+                isDetail
+              />
             </div>
           </article>
 
-          <article className="detail-panel">
-            <h2 className="detail-panel__title">Sensor Data</h2>
+          <article className={styles.detailPanel}>
+            <h2 className={styles.detailPanelTitle}>Sensor Data</h2>
 
-            <div className="detail-grid">
-              <div className="detail-list__item">
-                <span className="detail-list__label">Sensor ID</span>
-                <span className="detail-list__value">
-                  {sensorDisplayId(event.sensor_id)}
-                </span>
-              </div>
-
-              <div className="detail-list__item">
-                <span className="detail-list__label">Sensor History</span>
-                <span className="detail-list__value">
-                  {relatedEvents.length} stored events
-                </span>
-              </div>
-
-              <div className="detail-list__item">
-                <span className="detail-list__label">Category</span>
-                <span className="detail-list__value">
-                  {categoryName(event.category)}
-                </span>
-              </div>
-
-              <div className="detail-list__item">
-                <span className="detail-list__label">Last Sensor Event</span>
-                <span className="detail-list__value" title={event.event_id}>
-                  {formatEventDisplayId(event.event_id)}
-                </span>
-              </div>
-
-              <div className="detail-list__item">
-                <span className="detail-list__label">Region</span>
-                <span className="detail-list__value">{event.region}</span>
-              </div>
-
-              <div className="detail-list__item">
-                <span className="detail-list__label">Previous Event</span>
-                <span
-                  className="detail-list__value"
-                  title={previousEvent?.event_id || undefined}
-                >
-                  {previousEvent?.event_id
+            <div className={styles.detailGrid}>
+              <DataListItem
+                label="Sensor ID"
+                value={sensorDisplayId(event.sensor_id)}
+                isDetail
+              />
+              <DataListItem
+                label="Sensor History"
+                value={`${relatedEvents.length} stored events`}
+                isDetail
+              />
+              <DataListItem
+                label="Category"
+                value={categoryName(event.category)}
+                isDetail
+              />
+              <DataListItem
+                label="Last Sensor Event"
+                value={formatEventDisplayId(event.event_id)}
+                valueTitle={event.event_id}
+                isDetail
+              />
+              <DataListItem
+                label="Region"
+                value={event.region}
+                isDetail
+              />
+              <DataListItem
+                label="Previous Event"
+                value={
+                  previousEvent?.event_id
                     ? formatEventDisplayId(previousEvent.event_id)
-                    : "N/A"}
-                </span>
-              </div>
-
-              <div className="detail-list__item">
-                <span className="detail-list__label">Coordinates</span>
-                <span className="detail-list__value">
-                  {formatCoordinates(event.latitude, event.longitude)}
-                </span>
-              </div>
+                    : "N/A"
+                }
+                valueTitle={previousEvent?.event_id || undefined}
+                isDetail
+              />
+              <DataListItem
+                label="Coordinates"
+                value={formatCoordinates(event.latitude, event.longitude)}
+                isDetail
+              />
             </div>
           </article>
         </div>

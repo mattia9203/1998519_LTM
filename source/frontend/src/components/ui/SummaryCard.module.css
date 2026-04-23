@@ -1,0 +1,46 @@
+.summaryGrid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.summaryCard {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 104px;
+  padding: 18px 20px;
+  justify-content: center;
+}
+
+.summaryCardAccent .summaryCardLabel,
+.summaryCardAccent .summaryCardValue {
+  color: var(--text-primary);
+}
+
+.summaryCardLabel {
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+
+.summaryCardValue {
+  font-size: clamp(2rem, 1.7rem + 0.9vw, 3rem);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+@media (max-width: 1320px) {
+  .summaryGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  .summaryGrid {
+    grid-template-columns: 1fr;
+  }
+}

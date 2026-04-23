@@ -4,3 +4,4 @@ httpx-sse
 numpy
 uvicorn[standard]
 websockets
+orjson

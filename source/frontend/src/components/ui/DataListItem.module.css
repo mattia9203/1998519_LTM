@@ -1,0 +1,25 @@
+.dataList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dataListItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dataListLabel {
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.dataListValue {
+  font-size: 17px;
+  line-height: 1.3;
+}
+
+.dataListValueMuted {
+  color: var(--text-secondary);
+}

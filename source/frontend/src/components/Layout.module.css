@@ -1,0 +1,80 @@
+.appShell {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.platformSidebar {
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  padding: 28px 14px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.platformBrand {
+  margin-bottom: 32px;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.platformNav {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.platformNavLink {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-bg);
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+  box-shadow: var(--shadow-soft);
+}
+
+.platformNavLinkActive {
+  background: #ddd8d2;
+  color: var(--text-primary);
+}
+
+.platformNavLinkStatic {
+  cursor: default;
+}
+
+.platformContent {
+  padding: 26px 34px 40px;
+}
+
+@media (max-width: 920px) {
+  .appShell {
+    grid-template-columns: 1fr;
+  }
+  .platformSidebar {
+    padding: 20px 18px 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    height: auto;
+    z-index: 100;
+  }
+  .platformNav {
+    overflow-x: auto;
+    flex-direction: row;
+    padding-bottom: 18px;
+  }
+  .platformNavLink {
+    white-space: nowrap;
+  }
+  .platformContent {
+    padding: 22px 18px 32px;
+  }
+}

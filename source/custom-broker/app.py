@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import os
 import signal
@@ -9,6 +8,7 @@ from typing import Any
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
+import orjson
 import websockets
 from websockets.exceptions import ConnectionClosedOK
 
@@ -60,6 +60,14 @@ class ReplicaConnection:
     replica_id: int
     websocket: Any = None
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+# ---------------------------------------------------------------------------
+# Retry configuration for sensor reconnection
+# ---------------------------------------------------------------------------
+SENSOR_RECONNECT_BASE_DELAY = float(os.getenv("SENSOR_RECONNECT_BASE_DELAY", "1.0"))
+SENSOR_RECONNECT_MAX_DELAY = float(os.getenv("SENSOR_RECONNECT_MAX_DELAY", "30.0"))
+SENSOR_RECONNECT_MAX_ATTEMPTS = int(os.getenv("SENSOR_RECONNECT_MAX_ATTEMPTS", "0"))  # 0 = infinite
 
 
 class Broker:
@@ -191,43 +199,78 @@ class Broker:
         )
 
     async def _sensor_listener(self, sensor: Sensor) -> None:
+        """Connect to a sensor WebSocket with automatic reconnection on failure."""
         sensor_ws_url = self._build_sensor_ws_url(sensor.websocket_url)
-        websocket = None
-        try:
-            logger.info(
-                "Connecting to sensor %s at %s", sensor.sensor_id, sensor_ws_url
-            )
-            websocket = await websockets.connect(sensor_ws_url)
+        backoff = SENSOR_RECONNECT_BASE_DELAY
+        attempts = 0
 
-            async for raw_message in websocket:
-                if isinstance(raw_message, bytes):
-                    raw_message = raw_message.decode("utf-8")
-
-                measurement = json.loads(raw_message)
-                outgoing = json.dumps(
-                    {
-                        "sensor_id": sensor.sensor_id,
-                        "sensor_name": sensor.name,
-                        "category": sensor.category,
-                        "region": sensor.region,
-                        "coordinates": sensor.coordinates,
-                        "measurement_unit": sensor.measurement_unit,
-                        "sampling_rate_hz": sensor.sampling_rate_hz,
-                        "timestamp": measurement["timestamp"],
-                        "value": measurement["value"],
-                    }
+        while not self.stop_event.is_set():
+            websocket = None
+            try:
+                logger.info(
+                    "Connecting to sensor %s at %s", sensor.sensor_id, sensor_ws_url
                 )
-                await self._broadcast(outgoing)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("Sensor %s stream closed: %s", sensor.sensor_id, exc)
-        finally:
-            if websocket is not None:
-                with suppress(Exception):
-                    await websocket.close()
+                websocket = await websockets.connect(sensor_ws_url)
+                logger.info("Connected to sensor %s", sensor.sensor_id)
 
-    async def _broadcast(self, message: str) -> None:
+                # Reset backoff on successful connection
+                backoff = SENSOR_RECONNECT_BASE_DELAY
+                attempts = 0
+
+                async for raw_message in websocket:
+                    if self.stop_event.is_set():
+                        return
+
+                    if isinstance(raw_message, bytes):
+                        raw_message = raw_message.decode("utf-8")
+
+                    measurement = orjson.loads(raw_message)
+                    outgoing = orjson.dumps(
+                        {
+                            "sensor_id": sensor.sensor_id,
+                            "sensor_name": sensor.name,
+                            "category": sensor.category,
+                            "region": sensor.region,
+                            "coordinates": sensor.coordinates,
+                            "measurement_unit": sensor.measurement_unit,
+                            "sampling_rate_hz": sensor.sampling_rate_hz,
+                            "timestamp": measurement["timestamp"],
+                            "value": measurement["value"],
+                        }
+                    )
+                    await self._broadcast(outgoing)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "Sensor %s stream closed: %s — reconnecting in %.1fs",
+                    sensor.sensor_id,
+                    exc,
+                    backoff,
+                )
+            finally:
+                if websocket is not None:
+                    with suppress(Exception):
+                        await websocket.close()
+
+            # Check if we should stop retrying
+            if self.stop_event.is_set():
+                return
+
+            attempts += 1
+            if SENSOR_RECONNECT_MAX_ATTEMPTS > 0 and attempts >= SENSOR_RECONNECT_MAX_ATTEMPTS:
+                logger.error(
+                    "Sensor %s: max reconnect attempts (%d) reached — giving up.",
+                    sensor.sensor_id,
+                    SENSOR_RECONNECT_MAX_ATTEMPTS,
+                )
+                return
+
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, SENSOR_RECONNECT_MAX_DELAY)
+
+    async def _broadcast(self, message: bytes) -> None:
+        """Send a pre-serialized message to all connected replicas in parallel."""
         async with self.replica_lock:
             connected_replicas = list(self.replicas.values())
 
@@ -242,7 +285,7 @@ class Broker:
             return_exceptions=True,
         )
 
-    async def _send_to_replica(self, replica: ReplicaConnection, message: str) -> None:
+    async def _send_to_replica(self, replica: ReplicaConnection, message: bytes) -> None:
         async with replica.send_lock:
             websocket = replica.websocket
             if websocket is None:

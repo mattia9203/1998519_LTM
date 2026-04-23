@@ -5,7 +5,7 @@ from datetime import datetime
 from collections import deque
 import asyncio
 import httpx
-import json
+import orjson
 import os
 import logging
 from urllib.parse import urlsplit
@@ -73,12 +73,34 @@ class ConnectionManager:
             log.info(f"Dashboard disconnected. Total: {len(self.active_connections)}")
 
     async def broadcast(self, message: dict):
-        json_message = json.dumps(message, default=str)
-        for connection in self.active_connections:
+        """Send message to all connected dashboards in parallel, pruning dead ones."""
+        if not self.active_connections:
+            return
+
+        json_bytes = orjson.dumps(message, default=str)
+        json_message = json_bytes.decode("utf-8")
+
+        async def _safe_send(connection: WebSocket):
             try:
                 await connection.send_text(json_message)
+                return None  # success
             except Exception:
-                pass
+                return connection  # failed — mark for removal
+
+        results = await asyncio.gather(
+            *(_safe_send(conn) for conn in self.active_connections),
+            return_exceptions=True,
+        )
+
+        # Remove dead connections discovered during broadcast
+        dead = [r for r in results if isinstance(r, WebSocket)]
+        for conn in dead:
+            if conn in self.active_connections:
+                self.active_connections.remove(conn)
+                log.info(
+                    "Pruned dead dashboard connection. Total: %d",
+                    len(self.active_connections),
+                )
 
 
 ws_manager = ConnectionManager()
@@ -215,25 +237,26 @@ async def persist_event(payload: dict) -> str:
 # 5. HEALTH CHECK TASK
 # ==========================================
 async def ping_replicas_continuously():
-    """Refresh replica health from a fixed set of local ports."""
+    """Refresh replica health from a fixed set of local ports — in parallel."""
     global active_replicas
     global dead_replicas
 
     async with httpx.AsyncClient(timeout=2.0) as client:
         while True:
-            healthy_replicas = []
-            unreachable_replicas = []
-
-            for replica_url in ALL_INITIAL_REPLICAS:
+            async def _check_one(replica_url: str) -> tuple[str, bool]:
                 try:
                     response = await client.get(f"{replica_url}/health")
-                    if response.status_code == 200:
-                        healthy_replicas.append(replica_url)
-                    else:
-                        unreachable_replicas.append(replica_url)
+                    return (replica_url, response.status_code == 200)
                 except Exception as e:
                     log.warning(f"Health check fallito per {replica_url}: {e}")
-                    unreachable_replicas.append(replica_url)
+                    return (replica_url, False)
+
+            results = await asyncio.gather(
+                *(_check_one(url) for url in ALL_INITIAL_REPLICAS)
+            )
+
+            healthy_replicas = [url for url, ok in results if ok]
+            unreachable_replicas = [url for url, ok in results if not ok]
 
             active_replicas = healthy_replicas
             dead_replicas = unreachable_replicas
@@ -322,13 +345,20 @@ async def receive_event(payload: dict):
         )
         return {"status": "ignored", "reason": "duplicate"}
 
+    # Optimistic dedup: claim this event_id in cache immediately so that
+    # concurrent requests from other replicas hit the fast-path above
+    # instead of racing all the way to the DB.
+    recent_events_cache.append(event_id)
+
     sensor_registered = await upsert_sensor(normalized_payload)
     if not sensor_registered:
+        # Roll back cache entry so a future retry can succeed
+        if event_id in recent_events_cache:
+            recent_events_cache.remove(event_id)
         raise HTTPException(status_code=503, detail="sensor_persistence_failed")
 
     persistence_status = await persist_event(normalized_payload)
     if persistence_status == "duplicate":
-        recent_events_cache.append(event_id)
         log.info(
             "DUPLICATE(DB): event_id=%s type=%s sensor=%s",
             event_id,
@@ -338,9 +368,11 @@ async def receive_event(payload: dict):
         return {"status": "ignored", "reason": "duplicate"}
 
     if persistence_status != "inserted":
+        # Roll back cache entry so a future retry can succeed
+        if event_id in recent_events_cache:
+            recent_events_cache.remove(event_id)
         raise HTTPException(status_code=503, detail="event_persistence_failed")
 
-    recent_events_cache.append(event_id)
     live_payload = _build_live_payload(normalized_payload)
     log.info(
         "ALERT: event_id=%s type=%s sensor=%s amp=%s",
